@@ -1,6 +1,6 @@
 -- 001_enable_pgvector.sql
 -- Enable the pgvector extension for semantic search support
 
-CREATE EXTENSION IF NOT EXISTS pgvector;
+CREATE EXTENSION IF NOT EXISTS vector;
 
-COMMENT ON EXTENSION pgvector IS 'Vector similarity search (embeddings)';
+COMMENT ON EXTENSION vector IS 'Vector similarity search (embeddings)';
