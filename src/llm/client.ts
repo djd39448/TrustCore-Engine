@@ -72,14 +72,16 @@ export async function classifyTaskIntent(
     taskText,
     `You are a task router for an AI agent system. Given a task, reply with ONLY one of these agent slugs:
 - "research" — web research, information lookup, fact-finding, knowledge retrieval
+- "email-writer" — drafting emails, writing messages, composing correspondence
 - "alex" — orchestration, planning, coordination, general tasks
 
 Reply with just the slug and nothing else. No explanation.`
   );
 
   if (!result) return null;
-  const slug = result.trim().toLowerCase().replace(/[^a-z]/g, '');
+  const slug = result.trim().toLowerCase().replace(/[^a-z-]/g, '');
   if (slug === 'research') return 'research';
+  if (slug === 'email-writer' || slug === 'emailwriter') return 'email-writer';
   if (slug === 'alex') return 'alex';
   return null;
 }

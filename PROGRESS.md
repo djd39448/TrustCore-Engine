@@ -1,108 +1,90 @@
 # TrustCore Engine — Build Progress
 
-## Current Phase: Phase 4 — Mission Control UI
+## ✅ BUILD COMPLETE
+
+All phases complete. Both test suites passing (28/28). TypeScript clean.
 
 ---
 
-## Phase 1: Infrastructure ✅ COMPLETE
-- [x] PostgreSQL + pgvector via Docker Compose
-- [x] 11 migrations (all tables + indexes)
-- [x] Seed: Alex (chief) + System agents
-- [x] `.env` created from `.env.example`
-- [x] Fixed: docker image tag `pg16-latest` → `pg16`
-- [x] Fixed: extension name `pgvector` → `vector` in migration 001
+## Summary of Everything Built
+
+### Infrastructure (Phase 1)
+- PostgreSQL + pgvector via Docker Compose (`pgvector/pgvector:pg16`)
+- 11 migrations: agents, sessions, tasks, unified_memory, memory_consolidations, agent_memory, agent_tool_calls, knowledge_base + indexes
+- Seed: system + alex + research + email-writer agents
+
+### MCP Server + Tools (Phase 2)
+- `src/mcp/tools.ts` — 8 tool implementations: read/write unified_memory, read/write own_memory, create/update task, log_tool_call, search_knowledge_base
+- `src/mcp/server.ts` — MCP stdio server with Zod validation
+- `src/mcp/mission-control-server.ts` — Read-only MCP server for dashboard: get_recent_activity, get_tasks, get_agents, get_consolidations
+
+### Embedding + LLM (Phase 3a)
+- `src/embedding/client.ts` — Ollama nomic-embed-text:latest, URL normalization, graceful fallback
+- `src/llm/client.ts` — Ollama chat/prompt, classifyTaskIntent() with LLM + keyword fallback
+
+### Agent Framework (Phase 3b)
+- `src/agents/base/SubAgent.ts` — Abstract base: poll loop, log(), remember(), instrument()
+- `src/agents/registry.ts` — dispatch() creates child tasks; getAgentStatuses() for dashboard
+- `src/agents/alex/index.ts` — Chief-of-staff: 60s heartbeat, LLM-based task routing, memory consolidation with LLM digest
+- `src/agents/research/index.ts` — KB lookup + stub live research
+- `src/agents/email-writer/index.ts` — 3-step workflow: research → draft → review (configurable model)
+
+### Config (Phase 12)
+- `src/config.ts` — Typed central config with defaults, validation, redacted logging
+
+### Knowledge Base Ingestion
+- `src/scripts/ingest.ts` — Chunk text files + embed + store; `npm run ingest <path>`
+
+### Mission Control API (Phase 4a)
+- `src/api/server.ts` — Express HTTP API + WebSocket (port 3002)
+- Endpoints: GET /api/agents, /api/tasks, /api/memories, /api/tool-calls, /api/knowledge; POST /api/tasks
+- WS broadcasts: task_update, task_created, memory_event (2s poll)
+
+### Dashboard UI (Phase 4b)
+- `apps/dashboard/` — Next.js 15 App Router, no external UI library
+- AgentSidebar: live agent list with type badges and active status
+- TaskBoard: 4-column kanban (pending/in_progress/completed/failed), new-task modal, live highlights
+- MemoryFeed: WebSocket real-time event stream, expandable content, relative timestamps
+
+### Tests
+- `scripts/test-memory.ts` — 14 unit tests: DB, memory CRUD, task lifecycle, tool calls, KB
+- `scripts/integration-test.ts` — 14 end-to-end tests: Alex → email-writer chain, full memory verification
+
+### Docker
+- `docker-compose.yml` — postgres, ollama, alex, research, email-writer, mcp, api
+- `docker-compose.dev.yml` — source volume mounts, Node debug ports, restart: no
+
+### Docs
+- `README.md` — Getting started, ASCII architecture diagram, file reference, how to add sub-agents, memory consolidation explanation, env var reference
 
 ---
 
-## Phase 2: MCP Server + Alex Agent 🔄 IN PROGRESS
+## Key Decisions Made
 
-### 2a: Project scaffold + DB client ✅
-- [x] npm install + `@modelcontextprotocol/sdk` + `@types/pg`
-- [x] `src/db/client.ts` — pg pool, typed query helper (NodeNext ESM)
-- [x] Fixed pgvector npm version `^0.1.10` → `^0.2.1`
-
-### 2b: MCP tool implementations ✅
-- [x] `read_unified_memory` — importance-ranked retrieval with filters
-- [x] `write_unified_memory` — log event to shared consciousness
-- [x] `read_own_memory` — agent reads own private journal
-- [x] `write_own_memory` — personal detail logging
-- [x] `log_tool_call` — operational instrumentation
-- [x] `create_task` — spawn task tree node (requires `created_by` agent)
-- [x] `update_task` — mark task progress
-- [x] `search_knowledge_base` — by agent scope
-
-### 2c: MCP server (stdio) ✅
-- [x] `src/mcp/server.ts` — MCP protocol over stdio
-- [x] Tool registration + dispatch for all 8 tools
-- [x] Zod validation + typed error responses
-
-### 2d: Alex main loop ✅
-- [x] `src/agents/alex/index.ts` — always-on loop with 60s heartbeat
-- [x] Polls pending tasks assigned to alex, marks in_progress → completed
-- [x] Consolidation: rolls up old low-importance memories → memory_consolidations
-- [x] Graceful SIGINT shutdown with final memory write
-- [x] **Smoke tested** — connects to DB, writes startup event, heartbeat fires
+1. **NodeNext ESM** — `module: NodeNext` required for `@modelcontextprotocol/sdk` exports map; all imports use `.js` extensions
+2. **DB as message bus** — No IPC between agents; sub-agents poll the tasks table. Simple, observable, crash-safe.
+3. **Graceful LLM degradation** — Every LLM/embedding call returns null on failure; callers fall back to heuristics. The system runs without Ollama.
+4. **Registry validates before dispatch** — Alex can only dispatch to slugs in `REGISTERED_AGENTS` and active DB rows, preventing silent FK errors.
+5. **Two-tier memory** — `unified_memory` = shared consciousness visible to all agents; `agent_memory` = private journal per agent.
+6. **Keyword fallback classifier** — When Ollama is offline, Alex uses regex keyword matching (email→email-writer, research→research, else→alex).
+7. **Mission Control API separate from MCP** — REST/WS API for the dashboard; MCP stdio for agent tooling. No coupling.
+8. **pgvector cosine similarity** — `<=>` operator on vector(768) columns with IVFFlat indexes; falls back to recency+importance when embeddings are NULL.
 
 ---
 
-## Phase 3: Sub-agents + Embedding Pipeline 🔄 IN PROGRESS
+## How to Run in the Morning
 
-### 3a: Embedding pipeline ✅
-- [x] `src/embedding/client.ts` — Ollama nomic-embed-text client
-- [x] Wired into `writeUnifiedMemory`, `writeOwnMemory`
-- [x] Vector search in `readUnifiedMemory`, `readOwnMemory`, `searchKnowledgeBase`
-- [x] URL normalization: `0.0.0.0` → `localhost`, scheme + `:latest` tag auto-added
-- [x] Graceful fallback to recency ranking when Ollama unavailable
+```bash
+# Full stack (Docker)
+docker compose up -d
+npm test   # verify everything works
 
-### 3b: Sub-agent framework ✅
-- [x] `src/agents/base/SubAgent.ts` — abstract base with poll/handle/log/remember/instrument
-- [x] `src/agents/research/index.ts` — Research agent (KB lookup → stub live research)
-- [x] `research` registered in DB + seed.sql
-- [x] End-to-end: task created → Research picks up → completes with result JSON
+# Or local dev
+npm run dev:alex &
+npm run dev:research &
+npm run dev:email-writer &
+npm run dev:api &
+cd apps/dashboard && npm run dev
+```
 
-### 3c: LLM + Orchestration + KB Ingestion ✅
-- [x] `src/llm/client.ts` — Ollama chat completion client (llama3.2)
-- [x] `classifyTaskIntent()` — LLM-based task router with keyword fallback
-- [x] Alex orchestration: classify task → delegate to sub-agent or handle directly
-- [x] LLM-generated summaries in memory consolidation
-- [x] `src/scripts/ingest.ts` — Knowledge base ingestion: chunk + embed + store
-- [x] `npm run ingest <path> [--agent slug] [--chunk-size N]`
-
----
-
-## Phase 4: Mission Control UI 🔄 IN PROGRESS
-- Next.js app (separate repo or `apps/dashboard/`)
-- Real-time agent status board (tasks, memories, tool calls)
-- PostgreSQL-backed, reads from same DB as agents
-
-### 4a: API layer ✅
-- [x] `src/api/server.ts` — Express HTTP API + WebSocket push
-- [x] GET `/api/agents` — list all agents
-- [x] GET `/api/tasks` — list tasks (filter by status, agent; paginated)
-- [x] POST `/api/tasks` — create task (human-initiated)
-- [x] GET `/api/memories` — unified memory feed (filter by agent, event_type; paginated)
-- [x] GET `/api/tool-calls` — recent tool call log
-- [x] GET `/api/knowledge` — knowledge base preview
-- [x] GET `/health` — health check
-- [x] WebSocket on same port — broadcasts task_update, memory_event, task_created
-- [x] `npm run dev:api` — runs on port 3002 (API_PORT env override)
-- [x] `api` service added to docker-compose.yml
-
-### 4b: Dashboard UI
-- [ ] Next.js app scaffolded
-- [ ] Task board component (kanban by status)
-- [ ] Memory feed component (real-time, WebSocket)
-- [ ] Agent status sidebar
-
----
-
-## Known Issues / Notes
-- `psql` not available on host; use `docker exec trustcore-postgres psql ...`
-- IVFFlat index warnings on empty tables are harmless (expected)
-- ts-node ESM loader shows deprecation warning (cosmetic, non-breaking)
-- Run Alex: `node --loader ts-node/esm src/index.ts alex` or `npm run dev:alex`
-- Run Research: `node --loader ts-node/esm src/index.ts research` or `npm run dev:research`
-- Run MCP server: `node --loader ts-node/esm src/index.ts`
-- Ingest docs: `npm run ingest <path> [--agent <slug>]`
-- LLM model: `llama3.2` (override with `LLM_MODEL` env var)
-- Embedding model: `nomic-embed-text:latest` (override with `EMBEDDING_MODEL`)
+Talk to Alex by creating a task via POST /api/tasks or the dashboard "+ New Task" button.

@@ -36,3 +36,10 @@ docker-compose.override.yml
 *.sqlite
 *.sqlite3
 pgdata/
+
+# Next.js build artifacts
+apps/dashboard/.next/
+apps/dashboard/node_modules/
+
+# Claude
+.claude/scheduled_tasks.lock

@@ -1,0 +1,55 @@
+# docker-compose.dev.yml — Development overrides
+#
+# Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# Differences from production compose:
+#   - Source code mounted as volume → hot reload without rebuilding images
+#   - restart: no — agents stop when you Ctrl-C instead of restarting forever
+#   - Node debug port (9229) exposed for VS Code attach-to-process debugging
+#   - Ollama port exposed on all interfaces so host CLI can also use it
+
+version: '3.9'
+
+services:
+  postgres:
+    restart: no
+
+  ollama:
+    restart: no
+
+  alex:
+    restart: no
+    volumes:
+      - .:/app
+      - /app/node_modules   # don't override container node_modules with host
+    command: ["node", "--inspect=0.0.0.0:9229", "--loader", "ts-node/esm", "src/index.ts", "alex"]
+    ports:
+      - "9229:9229"         # Node.js debugger
+
+  research:
+    restart: no
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: ["node", "--inspect=0.0.0.0:9230", "--loader", "ts-node/esm", "src/index.ts", "research"]
+    ports:
+      - "9230:9230"
+
+  email-writer:
+    restart: no
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: ["node", "--loader", "ts-node/esm", "src/index.ts", "email-writer"]
+
+  mcp:
+    restart: no
+    volumes:
+      - .:/app
+      - /app/node_modules
+
+  api:
+    restart: no
+    volumes:
+      - .:/app
+      - /app/node_modules

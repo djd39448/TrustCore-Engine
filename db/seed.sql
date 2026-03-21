@@ -35,5 +35,16 @@ VALUES (
 )
 ON CONFLICT (slug) DO NOTHING;
 
+-- Insert the Email Writer sub-agent
+INSERT INTO agents (slug, display_name, type, description, is_active)
+VALUES (
+  'email-writer',
+  'Email Writer',
+  'sub-agent',
+  'Professional email drafting sub-agent: research → draft → review workflow',
+  true
+)
+ON CONFLICT (slug) DO NOTHING;
+
 -- Verify insertion
 SELECT id, slug, display_name, type FROM agents ORDER BY created_at;

@@ -2,257 +2,233 @@
 
 **Locally-hosted, always-on AI agent framework with persistent memory and sub-agent orchestration.**
 
-TrustCore is the antithesis of cloud-dependent AI systems. It's designed for organizations that need:
-- Full local control (no API calls home)
-- Persistent, searchable memory across sessions
-- Autonomous agent swarms with specialization
-- Always-on readiness with single-button deployment
+TrustCore is the antithesis of cloud-dependent AI systems — designed for organizations that need full local control, persistent searchable memory, autonomous agent swarms, and always-on readiness.
 
-## Vision
-
-**One-button startup**: `docker compose up -d && bash scripts/migrate.sh`. Everything auto-wires on launch — Ollama LLM server, PostgreSQL database, memory system ready.
-
-**Three-tier architecture**:
-1. **Mission Control** — Next.js web UI (separate repo, single pane of glass)
-2. **Alex** — Chief of staff agent, always running, persistent memory, orchestrates sub-agents
-3. **Sub-agent swarm** — Specialized Docker containers, each with tools, skills, and RAG knowledge bases
-
-## Core Design: Two-Tier Memory
-
-The most important architectural decision is how agents remember.
-
-### Unified Memory (Shared Consciousness)
-Every agent reads it. Each agent writes only about its own actions.
-
-**Example**: "Yesterday Dave asked Alex to send an email. Alex called the email-writer agent. Draft approved. Mailbox agent sent it."
-
-- Event-based structure (task_started, task_completed, agent_called, user_interaction)
-- Importance-weighted (1–5) for ranking in retrieval
-- Embedded for semantic search + SQL filters
-- Session-aware but not session-limited (survives restarts)
-
-### Individual Memory (Agent's Personal Journal)
-Private to each agent. Granular operational detail.
-
-**Example**: "Received task from Alex. Ran research workflow. Checked brand voice doc. Wrote 3 drafts. Alex approved draft 2 with one edit. Recorded feedback for future reference."
-
-- Workflow steps, tool details, feedback, learned preferences
-- Embedded for semantic retrieval
-- Includes optional backlinks to unified events for reconstruction
-- Agent-only read access
-
-## Database Schema
-
-### Tables
-
-| Table | Purpose | Rate | Embedded |
-|-------|---------|------|----------|
-| `agents` | Agent registry (slug, type, docker_image) | Low | No |
-| `sessions` | Bounded interaction windows (for querying, not limiting) | Low | No |
-| `unified_memory` | Shared events across all agents | Medium | Yes (768-dim) |
-| `agent_memory` | Per-agent private journals | High | Yes |
-| `tasks` | First-class task tree (subtask hierarchy) | Medium | No |
-| `agent_tool_calls` | Raw operational log (tool name, input, output) | Very High | No |
-| `memory_consolidations` | Rollup records for long-term compression | Low | No |
-| `knowledge_base` | RAG chunks per-agent or global | Low-Medium | Yes |
-
-### Key Design Decisions
-
-#### Embedding Dimension: 768
-- Matches `nomic-embed-text` (local, via Ollama)
-- Balanced: faster than 1536, better quality than 384
-- Tracked via `embedding_model` column for future model migrations
-
-#### Consolidation Architecture
-- Alex's heartbeat periodically rolls up old unified memories into `consolidation_summary` records
-- Original memories marked with `is_consolidated = true` and `consolidation_id` FK
-- Summaries get embeddings and participate in normal retrieval
-- "Expand this summary" is just `SELECT * FROM unified_memory WHERE consolidation_id = $id`
-- Immutable audit trail + fast retrieval ✓
-
-#### Soft Deletes
-- Memories are never hard-deleted
-- Mark as `is_archived = true` to exclude from hot retrieval
-- Preserves audit trail for compliance and debugging
-
-## MCP Tool Surface
-
-Agents interact with memory via Model Context Protocol:
-
-```
-read_unified_memory(query, limit, filters?)
-  → semantic search + importance ranking + SQL filters
-
-write_unified_memory(event_type, summary, content, importance?)
-  → log action to shared consciousness
-
-read_own_memory(query, limit, filters?)
-  → agent reads its own private journal
-
-write_own_memory(memory_type, summary, content, importance?)
-  → personal detail logging
-
-log_tool_call(tool_name, input, output, status, duration_ms?)
-  → operational instrumentation
-
-create_task(title, description, assigned_to?)
-  → spawn new task tree node
-
-update_task(id, status, result?)
-  → mark progress
-
-search_knowledge_base(query, limit?)
-  → hybrid global + agent-specific RAG
-```
+---
 
 ## Quick Start
 
-### Prerequisites
-- Docker & Docker Compose
-- `psql` CLI (or use container exec)
-- Node.js 18+ (for future server code)
-
-### Boot Up
-
 ```bash
-# 1. Copy config
-cp .env.example .env
-# Edit .env — at minimum set POSTGRES_PASSWORD
+# 1. Clone and configure
+git clone <repo-url>
+cd TrustCore-Engine
+cp .env.example .env        # edit DATABASE_URL, OLLAMA_HOST if needed
 
-# 2. Start containers
-docker compose up -d
+# 2. Start infrastructure
+docker compose up -d postgres ollama
 
-# 3. Wait for postgres health check
-docker compose logs postgres
-# Look for: "database system is ready to accept connections"
-
-# 4. Run migrations
+# 3. Run database migrations
 bash scripts/migrate.sh
 
-# 5. Seed initial agents
-source .env
-psql $DATABASE_URL -f db/seed.sql
+# 4. Seed agents
+docker exec trustcore-postgres psql -U trustcore -d trustcore_memory -f /migrations/seed.sql
 
-# 6. Verify
-psql $DATABASE_URL -c "SELECT slug, type FROM agents;"
-# Should show: alex (chief), system (system)
+# 5. Pull Ollama models (first time only)
+docker exec trustcore-ollama ollama pull llama3.2
+docker exec trustcore-ollama ollama pull nomic-embed-text
+
+# 6. Install Node dependencies
+npm install
+
+# 7. Run tests to verify everything
+npm test
+
+# 8. Start the full agent stack
+npm run dev:alex &          # Alex chief-of-staff loop
+npm run dev:research &      # Research sub-agent
+npm run dev:email-writer &  # Email Writer sub-agent
+npm run dev:api             # Mission Control API (port 3002)
+
+# 9. Open the Mission Control dashboard
+cd apps/dashboard && npm install && npm run dev
+# → visit http://localhost:3000
 ```
 
-### Verify the Schema
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      Mission Control UI                          │
+│              Next.js dashboard  (port 3000)                     │
+└──────────────────────────┬──────────────────────────────────────┘
+                           │  HTTP + WebSocket
+┌──────────────────────────▼──────────────────────────────────────┐
+│                    Mission Control API                           │
+│              Express + WebSocket  (port 3002)                   │
+│  GET /api/agents  /api/tasks  /api/memories  /api/tool-calls    │
+│  POST /api/tasks                                                 │
+└──────────────────────────┬──────────────────────────────────────┘
+                           │  PostgreSQL  (port 5432)
+┌──────────────────────────▼──────────────────────────────────────┐
+│                    TrustCore Database                            │
+│   pgvector/pgvector:pg16 — 8 tables, vector(768) embeddings     │
+│   agents │ tasks │ unified_memory │ agent_memory                 │
+│   sessions │ memory_consolidations │ agent_tool_calls            │
+│   knowledge_base                                                 │
+└──────────┬───────────────┬───────────────────────────────────────┘
+           │               │
+┌──────────▼──────┐  ┌─────▼──────────────────────────────────────┐
+│   Alex (chief)  │  │           Sub-agent Fleet                   │
+│  60s heartbeat  │  │  Research Agent  │  Email Writer  │  ...    │
+│  Task routing   │  │  (30s poll loop each)                       │
+│  Memory consol. │  └─────────────────────────────────────────────┘
+└──────────┬──────┘
+           │  classifyTaskIntent() → LLM or keyword fallback
+           │  dispatch() → child task in DB → sub-agent polls
+┌──────────▼──────┐
+│  Ollama  (LLM)  │
+│  llama3.2       │
+│  nomic-embed    │
+│  (port 11434)   │
+└─────────────────┘
+```
+
+---
+
+## Source File Reference
+
+### Core
+
+| File | Purpose |
+|------|---------|
+| `src/index.ts` | Entry point — dispatches to alex / research / email-writer / api / mcp / mc-mcp |
+| `src/config.ts` | Typed config: reads all env vars, validates on startup |
+| `src/db/client.ts` | PostgreSQL pool + typed `query()` helper; inline .env loader |
+
+### MCP Servers
+
+| File | Purpose |
+|------|---------|
+| `src/mcp/tools.ts` | All 8 agent tool implementations (read/write memory, tasks, KB, tool calls) |
+| `src/mcp/server.ts` | Agent tools MCP server (stdio) — used by agent processes |
+| `src/mcp/mission-control-server.ts` | Read-only MCP server for the dashboard — get_recent_activity, get_tasks, get_agents, get_consolidations |
+
+### Agents
+
+| File | Purpose |
+|------|---------|
+| `src/agents/base/SubAgent.ts` | Abstract base class: poll loop, handleTask(), log(), remember(), instrument() |
+| `src/agents/registry.ts` | Agent registry + `dispatch()` — creates child tasks, logs to shared memory |
+| `src/agents/alex/index.ts` | Alex always-on loop: heartbeat, task orchestration, memory consolidation |
+| `src/agents/research/index.ts` | Research sub-agent: KB lookup → stub live research |
+| `src/agents/email-writer/index.ts` | Email Writer: research → draft → review (3-step LLM workflow) |
+
+### Embedding + LLM
+
+| File | Purpose |
+|------|---------|
+| `src/embedding/client.ts` | Ollama nomic-embed-text client; URL normalization; graceful fallback |
+| `src/llm/client.ts` | Ollama chat completion; `classifyTaskIntent()` for task routing |
+
+### API + Dashboard
+
+| File | Purpose |
+|------|---------|
+| `src/api/server.ts` | Express HTTP + WebSocket API (port 3002); broadcasts live events |
+| `apps/dashboard/` | Next.js 15 Mission Control: AgentSidebar, TaskBoard (kanban), MemoryFeed (live WS) |
+
+### Scripts
+
+| File | Purpose |
+|------|---------|
+| `scripts/test-memory.ts` | 14-test suite: DB, memory CRUD, task lifecycle, tool calls, KB |
+| `scripts/integration-test.ts` | End-to-end: Alex → email-writer task chain, full memory verification |
+| `src/scripts/ingest.ts` | KB ingestion: chunk + embed text/code files into knowledge_base |
+
+---
+
+## How to Add a New Sub-agent
+
+1. **Create** `src/agents/<slug>/index.ts` extending `SubAgent`:
+   ```typescript
+   import { SubAgent, type TaskRecord } from '../base/SubAgent.js';
+   export class MyAgent extends SubAgent {
+     constructor() { super('my-agent', 'My Agent'); }
+     async handleTask(task: TaskRecord): Promise<unknown> {
+       // do work, return result
+     }
+   }
+   new MyAgent().start();
+   ```
+
+2. **Register** the slug in `src/agents/registry.ts`:
+   ```typescript
+   export const REGISTERED_AGENTS = new Set(['research', 'email-writer', 'my-agent']);
+   ```
+
+3. **Seed** the agent in `db/seed.sql`:
+   ```sql
+   INSERT INTO agents (slug, display_name, type, description, is_active)
+   VALUES ('my-agent', 'My Agent', 'sub-agent', 'Does X', true)
+   ON CONFLICT (slug) DO NOTHING;
+   ```
+
+4. **Wire** dispatch mode in `src/index.ts`:
+   ```typescript
+   } else if (mode === 'my-agent') {
+     await import('./agents/my-agent/index.js');
+   }
+   ```
+
+5. **Teach Alex** to route tasks to it — add keywords or update the LLM system prompt in `src/llm/client.ts`.
+
+---
+
+## How Memory Consolidation Works
+
+Alex runs a consolidation pass on every heartbeat (default 60s):
+
+```
+1. Find unified_memory rows where:
+   - is_consolidated = false
+   - is_archived = false
+   - importance <= 2
+   - created_at < NOW() - 7 days
+
+2. Ask LLM to summarize the batch into 2-3 sentences
+   (falls back to bullet list if Ollama is unavailable)
+
+3. Write the summary as a new unified_memory row (event_type = consolidation_summary)
+
+4. Insert a memory_consolidations record linking to that summary row,
+   capturing the time range and memory count
+
+5. Mark all source rows is_consolidated = true, consolidation_id = <new record>
+```
+
+This keeps the shared memory searchable without unbounded growth.
+
+---
+
+## Environment Variable Reference
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DATABASE_URL` | `postgresql://trustcore:changeme@localhost:5432/trustcore_memory` | PostgreSQL connection string |
+| `DB_POOL_MAX` | `10` | Max DB pool connections |
+| `OLLAMA_HOST` | `localhost:11434` | Ollama server URL (http:// added automatically) |
+| `EMBEDDING_MODEL` | `nomic-embed-text` | Embedding model (`:latest` appended if no tag) |
+| `LLM_MODEL` | `llama3.2` | LLM chat model for Alex and sub-agents |
+| `EMAIL_WRITER_MODEL` | `(LLM_MODEL)` | Override model for Email Writer specifically |
+| `ALEX_HEARTBEAT_MS` | `60000` | Alex heartbeat interval in ms |
+| `RESEARCH_POLL_MS` | `30000` | Sub-agent poll interval in ms |
+| `CONSOLIDATION_AGE_DAYS` | `7` | Days before memories eligible for consolidation |
+| `CONSOLIDATION_BATCH` | `50` | Max memories consolidated per pass |
+| `API_PORT` | `3002` | Mission Control API port |
+| `MCP_PORT` | `3001` | MCP server port |
+| `INGEST_CHUNK_SIZE` | `1500` | KB ingestion characters per chunk |
+| `INGEST_OVERLAP` | `200` | KB ingestion overlap between chunks |
+
+---
+
+## Running Tests
+
 ```bash
-source .env
-psql $DATABASE_URL -c "\dt"  # List all tables
-psql $DATABASE_URL -c "\d unified_memory"  # Inspect unified_memory
+npm test                  # runs both test suites
+npm run test:memory       # 14 unit tests (DB, memory, tasks, KB)
+npm run test:integration  # end-to-end orchestration scenario
 ```
 
-## Migration Strategy
-
-Migrations live in `db/migrations/` and are numbered sequentially. Always run them in order:
-
-```bash
-bash scripts/migrate.sh
-```
-
-This script:
-1. Connects to the database (using `$DATABASE_URL`)
-2. Runs all `.sql` files in `db/migrations/` in sorted order
-3. Exits on first error
-
-**Important**: Migration 007 resolves a circular foreign key between `unified_memory` and `memory_consolidations`. Don't skip it.
-
-## Phase 2 Roadmap
-
-- **L1**: Memory consolidation heartbeat in Alex
-- **L2**: Per-agent knowledge base (RAG) ingestion pipeline
-- **L3**: Training factory to fine-tune local LLMs for specific sub-agents
-- **L4**: Cloud fallback API/OAuth integration for complex reasoning
-- **L5**: Mission Control UI (Next.js) with real-time agent dashboards
-
-## Architecture Diagrams
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     Mission Control (UI)                    │
-│                       (Next.js, Phase 2)                    │
-└────────────────────────┬────────────────────────────────────┘
-                         │ HTTP/WS
-                         ▼
-┌─────────────────────────────────────────────────────────────┐
-│                        Alex Agent                           │
-│          (Always-on, reads from shared memory)              │
-│  Task orchestration ─→ Spawns subtasks → Polls sub-agents  │
-└────┬─────────────────────────────────────────────────────────┘
-     │ MCP tool calls
-     ▼
-┌─────────────────────────────────────────────────────────────┐
-│          PostgreSQL with pgvector                           │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │ Unified Memory   │ Agent Memory  │ Tasks             │  │
-│  │ (Shared events)  │ (Journals)    │ (Tree structure)  │  │
-│  │ + Embeddings     │ + Embeddings  │ + Results         │  │
-│  └──────────────────────────────────────────────────────┘  │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │ Consolidations   │ Tool Calls    │ Knowledge Base    │  │
-│  │ (Rollups)        │ (Raw logs)    │ (RAG chunks)      │  │
-│  └──────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
-     │ MCP memory tools
-     ▼
-┌─────────────────────────────────────────────────────────────┐
-│                   Sub-Agent Swarm                           │
-│  ┌────────────┐  ┌────────────┐  ┌────────────┐             │
-│  │ Email      │  │ Research   │  │ Scheduling │             │
-│  │ Writer     │  │ Agent      │  │ Agent      │  ...        │
-│  │ (Docker)   │  │ (Docker)   │  │ (Docker)   │             │
-│  └────────────┘  └────────────┘  └────────────┘             │
-│  Each: tools, embeddings, private memory, RAG               │
-└─────────────────────────────────────────────────────────────┘
-```
-
-## File Structure
-
-```
-trustcore-engine/
-├── .env.example                    # Environment template
-├── .gitignore
-├── docker-compose.yml              # PostgreSQL + Ollama
-├── package.json
-├── tsconfig.json
-├── README.md (this file)
-│
-├── scripts/
-│   └── migrate.sh                  # Run migrations in order
-│
-└── db/
-    ├── schema.sql                  # Combined reference (generated)
-    ├── seed.sql                    # Initial agents
-    │
-    └── migrations/
-        ├── 001_enable_pgvector.sql          # CREATE EXTENSION pgvector
-        ├── 002_create_agents.sql            # agents table
-        ├── 003_create_sessions.sql          # sessions table
-        ├── 004_create_tasks.sql             # tasks table (hierarchical)
-        ├── 005_create_unified_memory.sql    # unified_memory table
-        ├── 006_create_memory_consolidations.sql  # memory_consolidations table
-        ├── 007_add_consolidation_fk.sql    # Add FK from unified_memory to consolidations
-        ├── 008_create_agent_memory.sql      # agent_memory table
-        ├── 009_create_agent_tool_calls.sql  # agent_tool_calls table
-        ├── 010_create_knowledge_base.sql    # knowledge_base table
-        └── 011_create_indexes.sql           # All performance indexes
-```
-
-## Development Notes
-
-- **Always run migrations in order** — they have internal dependencies
-- **IVFFlat index warnings on empty tables are harmless** — disappear after first insert
-- **Embedding model mismatch will silently fail at retrieval** — always verify `embedding_model` when adding vectors
-- **Session boundaries are optional** — memories exist independently; sessions are for querying ("what happened yesterday?")
-- **Alex is always-on** — system startup should spawn the Alex container first, wait for postgres health, then run migrations
-
-## Next Steps
-
-1. Boot the system: `docker compose up -d && bash scripts/migrate.sh`
-2. Verify schema: `psql $DATABASE_URL -f db/seed.sql`
-3. Implement Alex's main loop (always-on, reads MCP tools, processes tasks)
-4. Implement MCP server exposing memory tools
-5. Implement stub sub-agents as Docker containers
+Both exit with code 0 on success, 1 on failure (CI-friendly).

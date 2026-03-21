@@ -1,6 +1,7 @@
 import { pool, query } from '../../db/client.js';
-import { writeUnifiedMemory, updateTask, createTask, resolveAgentId } from '../../mcp/tools.js';
+import { writeUnifiedMemory, updateTask, resolveAgentId } from '../../mcp/tools.js';
 import { classifyTaskIntent, prompt } from '../../llm/client.js';
+import { dispatch } from '../registry.js';
 
 const HEARTBEAT_INTERVAL_MS = 60_000; // 1 minute
 const CONSOLIDATION_AGE_DAYS = 7;
@@ -119,8 +120,15 @@ async function orchestrateTask(task: {
   // 2. Fallback: keyword heuristic when Ollama is unavailable
   if (!targetAgent) {
     const text = `${task.title} ${task.description ?? ''}`.toLowerCase();
+    const emailKeywords = ['email', 'write an email', 'draft', 'message', 'compose', 'correspondence'];
     const researchKeywords = ['research', 'look up', 'find', 'search', 'what is', 'how does', 'explain', 'retrieve'];
-    targetAgent = researchKeywords.some((kw) => text.includes(kw)) ? 'research' : 'alex';
+    if (emailKeywords.some((kw) => text.includes(kw))) {
+      targetAgent = 'email-writer';
+    } else if (researchKeywords.some((kw) => text.includes(kw))) {
+      targetAgent = 'research';
+    } else {
+      targetAgent = 'alex';
+    }
     console.log(`[Alex] LLM unavailable — keyword fallback: routed to '${targetAgent}'`);
   } else {
     console.log(`[Alex] LLM classified task as '${targetAgent}'`);
@@ -148,39 +156,31 @@ async function orchestrateTask(task: {
     return;
   }
 
-  // Delegate to a sub-agent by spawning a child task assigned to them
+  // Delegate to a sub-agent via the registry
   try {
-    const subTask = await createTask(
+    const { subTaskId } = await dispatch(
       'alex',
-      task.title,
-      task.description ?? undefined,
+      task.id,
       targetAgent,
-      task.id
-    );
-
-    await writeUnifiedMemory(
-      'alex',
-      'agent_called',
-      `Alex delegated to ${targetAgent}: ${task.title}`,
-      { parent_task_id: task.id, sub_task_id: subTask.id, assigned_to: targetAgent },
-      3
+      task.title,
+      task.description ?? undefined
     );
 
     // Mark the parent task completed-with-delegation note
     await updateTask(task.id, 'completed', {
       delegated_to: targetAgent,
-      sub_task_id: subTask.id,
+      sub_task_id: subTaskId,
     });
 
     await writeUnifiedMemory(
       'alex',
       'task_completed',
       `Alex delegated task to ${targetAgent}: ${task.title}`,
-      { task_id: task.id, sub_task_id: subTask.id },
+      { task_id: task.id, sub_task_id: subTaskId },
       2
     );
 
-    console.log(`[Alex] Delegated '${task.title}' → ${targetAgent} (sub-task ${subTask.id})`);
+    console.log(`[Alex] Delegated '${task.title}' → ${targetAgent} (sub-task ${subTaskId})`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[Alex] Delegation failed: ${message}`);

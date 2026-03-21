@@ -82,6 +82,24 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  email-writer:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+      args:
+        AGENT_MODE: email-writer
+    container_name: trustcore-email-writer
+    command: ["node", "--loader", "ts-node/esm", "src/index.ts", "email-writer"]
+    env_file: .env
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    restart: unless-stopped
+
   api:
     build:
       context: .

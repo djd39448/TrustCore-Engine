@@ -1,11 +1,12 @@
 /**
  * TrustCore Engine — entry point
  *
- * Usage:
- *   npm run dev           → starts the MCP server (stdio)
- *   npm run dev:alex      → starts Alex's main loop
- *   npm run dev:research  → starts Research sub-agent
- *   node ... src/index.ts api   → starts Mission Control API (port 3002)
+ * Mode is selected by the first CLI argument (default: mcp):
+ *   npm run dev               → MCP server (stdio, port 3001)
+ *   npm run dev:alex          → Alex always-on chief-of-staff loop
+ *   npm run dev:research      → Research sub-agent poll loop
+ *   npm run dev:email-writer  → Email Writer sub-agent poll loop
+ *   npm run dev:api           → Mission Control HTTP+WS API (port 3002)
  */
 
 const mode = process.argv[2] ?? 'mcp';
@@ -16,9 +17,14 @@ async function main(): Promise<void> {
     await runAlex();
   } else if (mode === 'research') {
     await import('./agents/research/index.js');
+  } else if (mode === 'email-writer') {
+    await import('./agents/email-writer/index.js');
   } else if (mode === 'api') {
     const { startApiServer } = await import('./api/server.js');
     await startApiServer();
+  } else if (mode === 'mc-mcp') {
+    const { startMissionControlMcpServer } = await import('./mcp/mission-control-server.js');
+    await startMissionControlMcpServer();
   } else {
     const { startMcpServer } = await import('./mcp/server.js');
     await startMcpServer();
