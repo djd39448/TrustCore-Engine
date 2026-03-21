@@ -30,6 +30,75 @@ services:
       - ollama:/root/.ollama
     restart: unless-stopped
 
+  alex:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+      args:
+        AGENT_MODE: alex
+    container_name: trustcore-alex
+    command: ["node", "--loader", "ts-node/esm", "src/index.ts", "alex"]
+    env_file: .env
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    restart: unless-stopped
+
+  research:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+      args:
+        AGENT_MODE: research
+    container_name: trustcore-research
+    command: ["node", "--loader", "ts-node/esm", "src/index.ts", "research"]
+    env_file: .env
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    restart: unless-stopped
+
+  mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    container_name: trustcore-mcp
+    command: ["node", "--loader", "ts-node/esm", "src/index.ts"]
+    env_file: .env
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    container_name: trustcore-api
+    command: ["node", "--loader", "ts-node/esm", "src/index.ts", "api"]
+    env_file: .env
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      API_PORT: "3002"
+    ports:
+      - "3002:3002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   pgdata:
   ollama:

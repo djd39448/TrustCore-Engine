@@ -1,0 +1,21 @@
+FROM node:20-slim
+
+WORKDIR /app
+
+# Copy package files and install production deps
+COPY package.json package-lock.json* ./
+RUN npm ci --omit=dev
+
+# Copy TypeScript source + config
+COPY tsconfig.json ./
+COPY src/ ./src/
+
+# Install ts-node for development/runtime transpilation
+RUN npm install ts-node typescript @types/node @types/pg
+
+# Default agent mode (override with docker run ... alex / research)
+ENV NODE_ENV=production
+ARG AGENT_MODE=mcp
+ENV AGENT_MODE=${AGENT_MODE}
+
+CMD ["node", "--loader", "ts-node/esm", "src/index.ts"]
