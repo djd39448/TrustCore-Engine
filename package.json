@@ -1,0 +1,35 @@
+{
+  "name": "trustcore-engine",
+  "version": "0.1.0",
+  "description": "Locally-hosted, always-on AI agent framework with persistent memory and sub-agent orchestration",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "ts-node src/index.ts",
+    "migrate": "bash scripts/migrate.sh",
+    "seed": "psql $DATABASE_URL -f db/seed.sql",
+    "db:seed": "npm run migrate && npm run seed",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f"
+  },
+  "keywords": [
+    "ai-agent",
+    "local-first",
+    "persistent-memory",
+    "orchestration",
+    "mcp"
+  ],
+  "author": "TrustCore Team",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "typescript": "^5.3.3",
+    "ts-node": "^10.9.2"
+  },
+  "dependencies": {
+    "pg": "^8.11.3",
+    "pgvector": "^0.1.10",
+    "zod": "^3.22.4"
+  }
+}
