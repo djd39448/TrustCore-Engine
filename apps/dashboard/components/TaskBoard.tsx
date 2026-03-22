@@ -6,6 +6,8 @@ import { fetcher, createTask } from '@/lib/api';
 import type { Task, Agent } from '@/lib/types';
 import styles from './TaskBoard.module.css';
 
+const API_BASE = process.env['NEXT_PUBLIC_API_URL'] ?? 'http://localhost:3003';
+
 const COLUMNS: { key: Task['status']; label: string; color: string }[] = [
   { key: 'pending', label: 'Pending', color: '#f59e0b' },
   { key: 'in_progress', label: 'In Progress', color: '#3b82f6' },
@@ -82,6 +84,7 @@ function ResultPanel({ result }: { result: Record<string, unknown> }) {
 
 function TaskCard({ task }: { task: Task }) {
   const [expanded, setExpanded] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
 
   const duration =
     task.started_at && task.completed_at
@@ -89,6 +92,19 @@ function TaskCard({ task }: { task: Task }) {
           (new Date(task.completed_at).getTime() - new Date(task.started_at).getTime()) / 1000
         )
       : null;
+
+  const canCancel = task.status === 'pending' || task.status === 'in_progress';
+
+  async function handleCancel(e: React.MouseEvent) {
+    e.stopPropagation();
+    setCancelling(true);
+    try {
+      await fetch(`${API_BASE}/api/tasks/${task.id}/cancel`, { method: 'PATCH' });
+      await mutate('/api/tasks?limit=100');
+    } finally {
+      setCancelling(false);
+    }
+  }
 
   return (
     <div className={styles.card} onClick={() => setExpanded(!expanded)}>
@@ -109,6 +125,15 @@ function TaskCard({ task }: { task: Task }) {
             {duration !== null && <> · Duration: <b>{duration}s</b></>}
           </p>
           {task.result && <ResultPanel result={task.result} />}
+          {canCancel && (
+            <button
+              className={styles.btnCancelTask}
+              onClick={handleCancel}
+              disabled={cancelling}
+            >
+              {cancelling ? 'Cancelling…' : 'Cancel Task'}
+            </button>
+          )}
         </div>
       )}
     </div>

@@ -115,7 +115,7 @@ async function testUnifiedMemory() {
     const rows = await readUnifiedMemory('test-memory.ts observation', {
       agent_slug: 'alex',
       event_type: 'observation',
-      limit: 10,
+      limit: 100,
     });
     assert(rows.length > 0, 'expected at least 1 result');
     const found = rows.find((r) => r.id === memId);

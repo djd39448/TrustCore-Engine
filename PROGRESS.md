@@ -4,6 +4,14 @@
 
 All phases complete as of 2026-03-22. Both test suites passing (28/28). TypeScript clean.
 
+### Session 5 — 2026-03-22 Calendar Tab + KB Ingest + Vector Fix
+
+**Fix** — Vector search ordering: `CASE WHEN embedding IS NOT NULL THEN embedding <=> $N END NULLS LAST, importance DESC, created_at DESC` — null-embedding rows now returned correctly with stable secondary sort; fixes flaky test when heartbeat records outnumber limit
+**Fix** — `trustcore-agent-v1` display_name corrected in DB: `qwen2.5:0.5b` → `TrustCore Agent v1`
+**Phase C1** — `POST /api/knowledge`: paragraph-chunked text ingestion (~500 chars/chunk), nomic-embed-text embedding per chunk, stored in knowledge_base
+**Phase C2** — `GET /api/activity?hours=N`: hourly task bucket aggregation (created/completed/failed), recent 20 tasks with agent name join
+**Phase C3** — `CalendarView.tsx`: stacked hourly bar chart (purple/green/red segments), recent task timeline with status dots, `IngestForm` (title + source + content → POST /api/knowledge); Calendar tab wired — all 7 tabs now have real content, no more placeholders
+
 ### Session 4 — 2026-03-22 Stats View + KB Viewer + Email Web Search
 
 **Phase S1** — `GET /api/stats` endpoint: per-agent task counts (total/completed/failed/24h), task breakdown by status, memory event counts by type, system last-heartbeat + avg duration

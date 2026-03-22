@@ -186,6 +186,47 @@ export async function startApiServer(): Promise<void> {
     res.status(201).json({ id: taskId });
   });
 
+  // --- Task detail ---
+  app.get('/api/tasks/:id', async (req: Request, res: Response) => {
+    const { id } = req.params as { id: string };
+    const result = await query<{
+      id: string; title: string; description: string | null; status: string;
+      result: unknown; created_at: Date; started_at: Date | null; completed_at: Date | null;
+      assigned_to: string | null; created_by: string | null;
+    }>(
+      `SELECT t.id, t.title, t.description, t.status, t.result,
+              t.created_at, t.started_at, t.completed_at,
+              a.slug AS assigned_to, cb.slug AS created_by
+       FROM tasks t
+       LEFT JOIN agents a ON a.id = t.assigned_to_agent_id
+       LEFT JOIN agents cb ON cb.id = t.created_by_agent_id
+       WHERE t.id = $1`,
+      [id]
+    );
+    if (result.rows.length === 0) {
+      res.status(404).json({ error: 'Task not found' });
+      return;
+    }
+    res.json(result.rows[0]);
+  });
+
+  // --- Cancel task ---
+  app.patch('/api/tasks/:id/cancel', async (req: Request, res: Response) => {
+    const { id } = req.params as { id: string };
+    const result = await query<{ id: string; status: string }>(
+      `UPDATE tasks SET status = 'cancelled', completed_at = NOW(), updated_at = NOW()
+       WHERE id = $1 AND status IN ('pending', 'in_progress')
+       RETURNING id, status`,
+      [id]
+    );
+    if (result.rows.length === 0) {
+      res.status(404).json({ error: 'Task not found or already terminal' });
+      return;
+    }
+    broadcast('task_update', { id, status: 'cancelled' });
+    res.json({ id, status: 'cancelled' });
+  });
+
   // --- Memories ---
   app.get('/api/memories', async (req: Request, res: Response) => {
     const { agent, event_type, limit = '50', offset = '0' } = req.query as Record<string, string>;
