@@ -269,10 +269,10 @@ export async function startApiServer(): Promise<void> {
     const { slug } = req.params;
     const { limit = '20' } = req.query as Record<string, string>;
     const result = await query(
-      `SELECT am.id, am.event_type, am.summary, am.content, am.importance, am.created_at
+      `SELECT am.id, am.memory_type as event_type, am.summary, am.content, am.importance, am.created_at
        FROM agent_memory am
        JOIN agents a ON a.id = am.agent_id
-       WHERE a.slug = $1
+       WHERE a.slug = $1 AND am.is_archived = false
        ORDER BY am.created_at DESC
        LIMIT $2`,
       [slug, parseInt(limit, 10)]
@@ -281,8 +281,34 @@ export async function startApiServer(): Promise<void> {
   });
 
   // --- GPU status ---
-  app.get('/api/gpu', (_req: Request, res: Response) => {
-    res.json(getGPUStatus());
+  app.get('/api/gpu', async (_req: Request, res: Response) => {
+    const mem = getGPUStatus();
+    if (mem.length > 0) { res.json(mem); return; }
+    // Fall back to latest DB row per GPU (when resource-manager runs separately)
+    const result = await query(
+      `SELECT DISTINCT ON (gpu_index)
+         gpu_index as "index", gpu_name as name,
+         memory_used_mb as "memoryUsedMb", memory_free_mb as "memoryFreeMb",
+         memory_total_mb as "memoryTotalMb",
+         utilization_percent as "utilizationPct", temperature_c as "temperatureC"
+       FROM gpu_metrics
+       ORDER BY gpu_index, recorded_at DESC`
+    );
+    res.json(result.rows);
+  });
+
+  // --- GPU metrics history ---
+  app.get('/api/gpu/history', async (req: Request, res: Response) => {
+    const minutes = Math.min(parseInt((req.query as Record<string, string>)['minutes'] ?? '60', 10), 1440);
+    const result = await query(
+      `SELECT gpu_index, gpu_name, memory_used_mb, memory_free_mb, memory_total_mb,
+              utilization_percent, temperature_c, recorded_at
+       FROM gpu_metrics
+       WHERE recorded_at > now() - ($1 || ' minutes')::interval
+       ORDER BY recorded_at ASC`,
+      [minutes]
+    );
+    res.json(result.rows);
   });
 
   // --- LLM queue status ---

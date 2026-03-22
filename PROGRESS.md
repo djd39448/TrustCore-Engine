@@ -1,8 +1,25 @@
 # TrustCore Engine — Build Progress
 
-## ✅ OVERNIGHT BUILD COMPLETE
+## ✅ OVERNIGHT BUILD COMPLETE — RESOURCE MANAGER LIVE
 
-All overnight phases complete as of 2026-03-21. Both test suites passing (28/28). TypeScript clean.
+All phases complete as of 2026-03-22. Both test suites passing (28/28). TypeScript clean.
+
+### Session 2 — 2026-03-22 Fixes and Resource Manager
+
+**Fix 1** — Task failure detection: `SubAgent.detectStubResult()` catches `model='stub'` and body keywords, marks failed not completed
+**Fix 2** — Memory writes: `writeUnifiedMemory`/`writeOwnMemory` no longer use `::vector` cast for null; `log()`/`remember()` in SubAgent wrapped in try/catch — never crash the agent loop
+**Fix 3** — Agent memory endpoint: fixed `am.event_type` → `am.memory_type` column alias
+**Fix 4** — Heartbeat: Alex now writes `event_type='heartbeat'` to `unified_memory` every 60s
+**Fix 5** — `unified_memory_event_type_check` constraint updated to include `'heartbeat'` and `'system_alert'`
+
+**Phase 1** — `gpu_metrics` table updated: renamed columns to `memory_used_mb/free_mb/total_mb/utilization_percent`, added `temperature_c`
+**Phase 2** — Resource manager rebuilt: temperature, `canLoadModel()`, 30-min unified_memory summaries, `system_alert` on >80% util, mock fallback when nvidia-smi unavailable
+**Phase 3** — LLM queue rebuilt: 180s timeout, EventEmitter events (queued/started/completed/failed/timeout), modelName+modelSizeGB tracking
+**Phase 4** — LLM client fully wired through queue: all calls enqueued with priorities (1=alex, 2=agent, 3=embed, 4=factory), model size estimation for GPU routing
+**Phase 5** — `GET /api/gpu/history?minutes=N` endpoint added
+**Phase 6** — `OfficeView.tsx`: GPU cards with VRAM/util/temp bars, factory indicator, queue panel, 60-min SVG sparkline charts; wired to Office tab
+**Phase 7** — `trustcore-resource-manager` Docker service added; `GET /api/gpu` falls back to DB when in-memory empty
+**Phase 8** — `ARCHITECTURE.md` Part 6 added: two-GPU strategy, BSOD incident, resource manager, priority queue, Office view guide
 
 ---
 

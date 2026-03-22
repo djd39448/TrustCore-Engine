@@ -7,6 +7,7 @@ import TaskBoard from '@/components/TaskBoard';
 import MemoryFeed from '@/components/MemoryFeed';
 import MemoryView from '@/components/MemoryView';
 import AgentsView from '@/components/AgentsView';
+import OfficeView from '@/components/OfficeView';
 import { fetcher, WS_URL } from '@/lib/api';
 import type { WsMessage } from '@/lib/types';
 import styles from './page.module.css';
@@ -114,7 +115,7 @@ export default function Home() {
       case 'calendar': return <PlaceholderView name="Calendar" />;
       case 'projects': return <PlaceholderView name="Projects" />;
       case 'docs': return <PlaceholderView name="Docs" />;
-      case 'office': return <PlaceholderView name="Office" />;
+      case 'office': return <OfficeView />;
     }
   }
 

@@ -14,15 +14,18 @@ const CONSOLIDATION_BATCH = 50;
 export async function runAlex(): Promise<void> {
   console.log('[Alex] Starting up...');
 
-  await writeUnifiedMemory(
-    'alex',
-    'observation',
-    'Alex agent started',
-    { message: `Alex chief-of-staff initialized at ${new Date().toISOString()}` },
-    3
-  );
-
-  console.log('[Alex] Logged startup event to unified memory');
+  try {
+    await writeUnifiedMemory(
+      'alex',
+      'observation',
+      'Alex agent started',
+      { message: `Alex chief-of-staff initialized at ${new Date().toISOString()}` },
+      3
+    );
+    console.log('[Alex] Logged startup event to unified memory');
+  } catch (err) {
+    console.error('[Alex] Failed to write startup event:', err);
+  }
   console.log('[Alex] Entering heartbeat loop (every 60s)');
 
   // Run one heartbeat immediately, then schedule recurring
@@ -59,6 +62,19 @@ export async function runAlex(): Promise<void> {
 async function heartbeat(): Promise<void> {
   const ts = new Date().toISOString();
   console.log(`[Alex] Heartbeat at ${ts}`);
+
+  // Write heartbeat event so the dashboard indicator stays green
+  try {
+    await writeUnifiedMemory(
+      'alex',
+      'heartbeat',
+      `Alex heartbeat — system alive at ${ts}`,
+      { ts, agent: 'alex' },
+      1
+    );
+  } catch (err) {
+    console.error('[Alex] Failed to write heartbeat to unified_memory:', err);
+  }
 
   await pollPendingTasks();
   await consolidateOldMemories();

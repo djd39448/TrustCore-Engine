@@ -110,6 +110,19 @@ export abstract class SubAgent {
 
     try {
       const result = await this.handleTask(task);
+
+      // Detect stub/offline results — treat as failure rather than silent bad completion
+      const stubError = this.detectStubResult(result);
+      if (stubError) {
+        console.error(`[${this.displayName}] Task produced stub result: ${stubError}`);
+        await updateTask(task.id, 'failed', { error: stubError });
+        await this.log('task_failed', `${this.displayName} failed (offline): ${task.title}`, {
+          task_id: task.id,
+          error: stubError,
+        });
+        return;
+      }
+
       await updateTask(task.id, 'completed', result);
       await this.log('task_completed', `${this.displayName} completed: ${task.title}`, {
         task_id: task.id,
@@ -126,6 +139,31 @@ export abstract class SubAgent {
     }
   }
 
+  /**
+   * Returns an error string if the result looks like a stub/offline response,
+   * or null if the result appears genuine.
+   */
+  private detectStubResult(result: unknown): string | null {
+    if (result === null || result === undefined) return null;
+    if (typeof result !== 'object') return null;
+    const r = result as Record<string, unknown>;
+    // model='stub' is set explicitly by email-writer when LLM is offline
+    if (r['model'] === 'stub') return 'LLM offline — email draft unavailable';
+    // Check body/answer/result fields for offline/error markers
+    const textFields = ['body', 'answer', 'result', 'content', 'text'];
+    for (const field of textFields) {
+      const val = r[field];
+      if (typeof val === 'string') {
+        const lower = val.toLowerCase();
+        if (lower.includes('unavailable') || lower.includes('offline') ||
+            lower.includes('[stub]') || lower.includes('[error]')) {
+          return `Result indicates failure: ${val.slice(0, 120)}`;
+        }
+      }
+    }
+    return null;
+  }
+
   // ---------------------------------------------------------------------------
   // Helper shortcuts
   // ---------------------------------------------------------------------------
@@ -136,7 +174,12 @@ export abstract class SubAgent {
     content: unknown,
     importance = 3
   ): Promise<void> {
-    await writeUnifiedMemory(this.slug, eventType, summary, content, importance);
+    try {
+      await writeUnifiedMemory(this.slug, eventType, summary, content, importance);
+    } catch (err) {
+      // Memory writes must NEVER crash the agent loop — log and continue
+      console.error(`[${this.displayName}] unified_memory write failed (${eventType}):`, err);
+    }
   }
 
   protected async remember(
@@ -145,7 +188,12 @@ export abstract class SubAgent {
     content: unknown,
     importance = 3
   ): Promise<void> {
-    await writeOwnMemory(this.slug, memoryType, summary, content, importance);
+    try {
+      await writeOwnMemory(this.slug, memoryType, summary, content, importance);
+    } catch (err) {
+      // Memory writes must NEVER crash the agent loop — log and continue
+      console.error(`[${this.displayName}] agent_memory write failed (${memoryType}):`, err);
+    }
   }
 
   protected async instrument(

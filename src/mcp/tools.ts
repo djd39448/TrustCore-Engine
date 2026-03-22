@@ -12,7 +12,9 @@ export type UnifiedEventType =
   | 'agent_called'
   | 'user_interaction'
   | 'observation'
-  | 'consolidation_summary';
+  | 'consolidation_summary'
+  | 'heartbeat'
+  | 'system_alert';
 
 export type AgentMemoryType =
   | 'workflow_step'
@@ -166,14 +168,19 @@ export async function writeUnifiedMemory(
 ): Promise<{ id: string }> {
   const agentId = await resolveAgentId(agentSlug);
 
-  // Generate embedding from summary + content text
+  // Generate embedding — always proceed even if embedding fails
   const textForEmbed = `${summary}\n${typeof content === 'string' ? content : JSON.stringify(content)}`;
-  const embedding = await embed(textForEmbed);
+  let embedding: number[] | null = null;
+  try {
+    embedding = await embed(textForEmbed);
+  } catch (embedErr) {
+    console.error('[tools] writeUnifiedMemory: embedding failed, writing with null embedding:', embedErr);
+  }
 
   const result = await query<{ id: string }>(
     `INSERT INTO unified_memory
        (author_agent_id, session_id, event_type, summary, content, importance, embedding, embedding_model)
-     VALUES ($1, $2, $3, $4, $5, $6, $7::vector, $8)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING id`,
     [
       agentId,
@@ -242,13 +249,19 @@ export async function writeOwnMemory(
 ): Promise<{ id: string }> {
   const agentId = await resolveAgentId(agentSlug);
 
+  // Generate embedding — always proceed even if embedding fails
   const textForEmbed = `${summary}\n${typeof content === 'string' ? content : JSON.stringify(content)}`;
-  const embedding = await embed(textForEmbed);
+  let embedding: number[] | null = null;
+  try {
+    embedding = await embed(textForEmbed);
+  } catch (embedErr) {
+    console.error('[tools] writeOwnMemory: embedding failed, writing with null embedding:', embedErr);
+  }
 
   const result = await query<{ id: string }>(
     `INSERT INTO agent_memory
        (agent_id, memory_type, summary, content, importance, embedding, embedding_model)
-     VALUES ($1, $2, $3, $4, $5, $6::vector, $7)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING id`,
     [
       agentId,

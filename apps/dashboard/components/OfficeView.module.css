@@ -1,0 +1,235 @@
+.view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  background: #0f172a;
+  gap: 1rem;
+  padding-bottom: 1.5rem;
+}
+
+.sectionHeading {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #64748b;
+  margin: 0;
+}
+
+.gpuRow {
+  display: flex;
+  gap: 1rem;
+  padding: 0 1.25rem;
+  flex-wrap: wrap;
+}
+
+.gpuCard {
+  flex: 1;
+  min-width: 260px;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.gpuHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.25rem;
+}
+
+.gpuLabel {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #6366f1;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.gpuName {
+  font-size: 0.7rem;
+  color: #64748b;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.factoryBadge {
+  font-size: 0.6rem;
+  font-weight: 700;
+  background: #78350f;
+  color: #fcd34d;
+  padding: 2px 6px;
+  border-radius: 3px;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+.statRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.statLabel {
+  font-size: 0.7rem;
+  color: #64748b;
+  flex-shrink: 0;
+}
+
+.statValue {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #e2e8f0;
+  font-variant-numeric: tabular-nums;
+}
+
+.pct {
+  font-weight: 400;
+  color: #64748b;
+  font-size: 0.7rem;
+}
+
+.progressTrack {
+  width: 100%;
+  height: 5px;
+  background: #0f172a;
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 0.25rem;
+}
+
+.progressFill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.4s ease, background 0.4s ease;
+}
+
+/* Queue panel */
+.queuePanel {
+  margin: 0 1.25rem;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+}
+
+.queueStats {
+  display: flex;
+  gap: 2rem;
+  margin: 0.6rem 0;
+}
+
+.queueStat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.queueStatNum {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #e2e8f0;
+  line-height: 1;
+}
+
+.queueStatLabel {
+  font-size: 0.65rem;
+  color: #64748b;
+  margin-top: 0.15rem;
+}
+
+.queueList {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.queueItem {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.7rem;
+  background: #0f172a;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+}
+
+.queuePriority {
+  color: #6366f1;
+  font-weight: 600;
+  flex-shrink: 0;
+  min-width: 80px;
+}
+
+.queueItemLabel {
+  color: #94a3b8;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queueWait {
+  color: #475569;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.queueEmpty {
+  font-size: 0.72rem;
+  color: #475569;
+  margin: 0.4rem 0 0;
+}
+
+/* Charts */
+.chartsSection {
+  margin: 0 1.25rem;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.chartWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.chartLabel {
+  font-size: 0.68rem;
+  color: #64748b;
+}
+
+.chart {
+  display: block;
+  width: 100%;
+  height: 60px;
+}
+
+.chartEmpty {
+  font-size: 0.72rem;
+  color: #475569;
+  margin: 0;
+}
+
+.muted {
+  color: #475569;
+  font-size: 0.8rem;
+  padding: 1rem 1.25rem;
+  margin: 0;
+}

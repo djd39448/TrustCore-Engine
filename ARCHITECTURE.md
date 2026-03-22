@@ -599,7 +599,88 @@ All LLM calls in `src/llm/client.ts` have a 120-second hard timeout enforced via
 
 ---
 
-## Part 6: Mission Control Integration
+## Part 6: GPU Resource Manager
+
+### The Two-GPU Strategy
+
+TrustCore runs on a system with two RTX 3090 GPUs:
+
+- **GPU 0** — dedicated to training (autoresearch factory) and agent inference when the factory is idle. Has no display connection and can run at full sustained power.
+- **GPU 1** — handles the display, system UI, and agent inference. Must not be fully saturated during training or display output degrades.
+
+The resource manager enforces this split by tracking VRAM usage per GPU and routing inference requests to whichever GPU has headroom.
+
+### The BSOD Incident
+
+Early in development, running multiple Ollama model loads simultaneously caused a system crash (BSOD). Root cause: two large models (qwen3.5:35b-a3b + qwen3.5:9b) attempted to load into VRAM simultaneously when agents processed tasks concurrently. Combined VRAM requirement exceeded 24 GB, causing the GPU driver to crash the system.
+
+Two mitigations were applied:
+
+1. **`OLLAMA_MAX_LOADED_MODELS=1`** — forces Ollama to evict the current model before loading the next. This adds 10-30s latency on model switches but prevents the crash.
+2. **LLM priority queue** — serializes inference requests through a controlled queue so the resource manager knows exactly how much VRAM is committed at any moment.
+
+### The Resource Manager Service
+
+`src/resource-manager/index.ts` — runs as `trustcore-resource-manager` Docker service.
+
+**Polling:** Every 10 seconds, calls `nvidia-smi --query-gpu=index,name,memory.used,memory.free,memory.total,utilization.gpu,temperature.gpu --format=csv,noheader,nounits` and stores results in `gpu_metrics`.
+
+**Fallback:** If nvidia-smi is unavailable (CPU-only host, CI), logs a warning and returns mock data so the rest of the system continues to function.
+
+**Alerts:** When either GPU exceeds 80% utilization, writes a `system_alert` importance-4 event to `unified_memory`. Alert state is tracked per GPU — only one alert per GPU per high-utilization period.
+
+**30-minute summary:** Writes an `observation` importance-2 event to `unified_memory` summarizing current GPU health across both GPUs.
+
+### The Priority Queue
+
+`src/resource-manager/queue.ts` — all LLM inference calls go through this queue.
+
+Priority levels (lower = higher priority):
+
+| Priority | Label | Who uses it |
+|---|---|---|
+| 1 | alex_routing | Alex task classification and orchestration |
+| 2 | agent_execution | Sub-agent task execution (email-writer, research) |
+| 3 | embeddings | Embedding generation for memory writes |
+| 4 | factory | Training factory inference requests |
+
+Rules:
+- Max 2 concurrent LLM calls
+- Max 50 queued requests before rejecting
+- 180-second timeout per request (execution) — task marked failed on timeout
+- Queue depth logged to `unified_memory` when ≥ 3 pending
+
+### The gpu_metrics Table
+
+```sql
+gpu_metrics (
+  id                uuid PRIMARY KEY,
+  gpu_index         integer NOT NULL,      -- 0 or 1
+  gpu_name          text NOT NULL,
+  memory_used_mb    integer NOT NULL,
+  memory_free_mb    integer NOT NULL,
+  memory_total_mb   integer NOT NULL,
+  utilization_percent integer NOT NULL,    -- 0-100
+  temperature_c     integer,               -- null if sensor unavailable
+  recorded_at       timestamptz NOT NULL
+)
+```
+
+Indexed on `(gpu_index, recorded_at DESC)` for efficient per-GPU time-series queries.
+
+### Reading the Office View
+
+The Office tab in Mission Control surfaces the resource manager:
+
+- **GPU cards** — one per detected GPU, showing VRAM bar, utilization bar, temperature, and a "Factory running" badge when GPU 0 exceeds 50% utilization
+- **Color coding** — green < 60%, yellow 60-80%, red > 80% for both utilization and temperature
+- **LLM Queue panel** — shows active slot count, queue depth, and per-request priority/label/wait time
+- **History charts** — SVG sparklines of utilization % over the last 60 minutes, one per GPU
+- Refreshes: GPU cards every 10s, queue every 5s, history every 30s
+
+---
+
+## Part 7: Mission Control Integration
 
 Mission Control is the Next.js dashboard that gives humans and agents a shared view of the system. It reads from TrustCore Engine via the mission-control MCP server.
 
@@ -616,7 +697,7 @@ The Mission Control MCP server exposes read-only tools. The dashboard never writ
 
 ---
 
-## Part 7: Build Sequence
+## Part 8: Build Sequence
 
 Build in this order. Each phase depends on the previous ones being solid.
 
@@ -689,7 +770,7 @@ Build in this order. Each phase depends on the previous ones being solid.
 
 ---
 
-## Part 8: How to Use This Document
+## Part 9: How to Use This Document
 
 ### For Claude Code sessions
 

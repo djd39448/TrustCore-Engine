@@ -109,6 +109,22 @@ services:
         condition: service_started
     restart: unless-stopped
 
+  resource-manager:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    container_name: trustcore-resource-manager
+    command: ["node", "--loader", "ts-node/esm", "src/resource-manager/standalone.ts"]
+    env_file: .env
+    environment:
+      <<: *db-url
+      OLLAMA_HOST: http://ollama:11434
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # nvidia-smi requires host GPU access; if unavailable the service uses mock data
+    restart: unless-stopped
+
   api:
     build:
       context: .
