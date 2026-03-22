@@ -23,16 +23,25 @@ export interface ChatMessage {
 /**
  * Send a chat prompt to Ollama. Returns the assistant's reply text, or null on error.
  */
+const LLM_TIMEOUT_MS = 120_000;
+
 export async function chat(
   messages: ChatMessage[],
   model: string = LLM_MODEL
 ): Promise<string | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort();
+    console.error(`[LLM] Request timed out after ${LLM_TIMEOUT_MS / 1000}s (model=${model})`);
+  }, LLM_TIMEOUT_MS);
+
   try {
     const url = `${OLLAMA_HOST}/api/chat`;
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model, messages, stream: false }),
+      signal: controller.signal,
     });
 
     if (!response.ok) {
@@ -43,8 +52,14 @@ export async function chat(
     const data = (await response.json()) as { message?: { content?: string } };
     return data.message?.content ?? null;
   } catch (err) {
-    console.warn('[LLM] Ollama unavailable:', err instanceof Error ? err.message : String(err));
+    if (err instanceof Error && err.name === 'AbortError') {
+      console.error(`[LLM] Chat aborted: timeout after ${LLM_TIMEOUT_MS / 1000}s`);
+    } else {
+      console.warn('[LLM] Ollama unavailable:', err instanceof Error ? err.message : String(err));
+    }
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

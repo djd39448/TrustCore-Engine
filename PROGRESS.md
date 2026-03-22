@@ -1,8 +1,64 @@
 # TrustCore Engine — Build Progress
 
-## ✅ BUILD COMPLETE
+## ✅ OVERNIGHT BUILD COMPLETE
 
-All phases complete. Both test suites passing (28/28). TypeScript clean.
+All overnight phases complete as of 2026-03-21. Both test suites passing (28/28). TypeScript clean.
+
+---
+
+## Overnight Build — 2026-03-21
+
+### Phase O1 — LLM Timeout ✅ COMPLETE
+- 120s AbortController timeout on all LLM calls in `src/llm/client.ts`
+- Prevents tasks from hanging indefinitely in `in_progress`
+
+### Phase O2 — Infrastructure Safety ✅ COMPLETE
+- `OLLAMA_MAX_LOADED_MODELS=1` verified in `docker-compose.yml`
+- Documented in `ARCHITECTURE.md` Part 5b with full rationale
+
+### Phase O3 — Resource Manager ✅ COMPLETE
+- `src/resource-manager/index.ts` — nvidia-smi poll every 10s
+- `db/migrations/012_create_gpu_metrics.sql` — applied to DB
+- `getGPUStatus()` and `recommendGPU(modelSizeGB)` exported
+- Writes importance-4 unified_memory events when GPU > 80%
+
+### Phase O4 — LLM Priority Queue ✅ COMPLETE
+- `src/resource-manager/queue.ts` — min-heap, priorities 1–4
+- Max 2 concurrent, max 50 queued, rejects with error when full
+- Logs to unified_memory when depth ≥ 3
+
+### Phase O5 — .gitignore Cleanup ✅ COMPLETE
+- Removed all `.next` build artifacts from git tracking
+
+### Phase O6 — MemoryView Component ✅ COMPLETE
+- `apps/dashboard/components/MemoryView.tsx`
+- Paginated (50/page), filterable by agent + type, searchable, expandable
+
+### Phase O7 — AgentsView Component ✅ COMPLETE
+- `apps/dashboard/components/AgentsView.tsx`
+- Shows all agents; click to expand recent agent_memory entries
+
+### Phase O8 — Dashboard Navigation ✅ COMPLETE
+- Header tabs: Tasks, Memories, Team, Calendar, Projects, Docs, Office
+- Memories → MemoryView; Team → AgentsView; others → placeholders
+
+### Phase O9 — New API Endpoints ✅ COMPLETE
+- `GET /api/agents/:slug/memories`
+- `GET /api/gpu`
+- `GET /api/queue`
+- `GET /api/heartbeat`
+
+### Phase O10 — Heartbeat Health Indicator ✅ COMPLETE
+- HeartbeatIndicator in header: green (<2m), yellow (2–5m), red (>5m)
+
+### Phase O11 — Docker Compose Cleanup ✅ COMPLETE
+- Removed obsolete `version: '3.9'` line — no more warning
+
+### Phase O12 — Architecture Documentation ✅ COMPLETE
+- ARCHITECTURE.md Part 5b: Infrastructure Safety Settings
+- Resource manager, GPU routing, OLLAMA_MAX_LOADED_MODELS, LLM timeout all documented
+
+---
 
 ---
 

@@ -12,6 +12,8 @@ import express, { type Request, type Response } from 'express';
 import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { pool, query } from '../db/client.js';
+import { getGPUStatus, startResourceManager, stopResourceManager } from '../resource-manager/index.js';
+import { getQueueStatus } from '../resource-manager/queue.js';
 
 const PORT = parseInt(process.env['API_PORT'] ?? '3002', 10);
 
@@ -262,6 +264,46 @@ export async function startApiServer(): Promise<void> {
     res.json(result.rows);
   });
 
+  // --- Agent memories (individual agent_memory journal) ---
+  app.get('/api/agents/:slug/memories', async (req: Request, res: Response) => {
+    const { slug } = req.params;
+    const { limit = '20' } = req.query as Record<string, string>;
+    const result = await query(
+      `SELECT am.id, am.event_type, am.summary, am.content, am.importance, am.created_at
+       FROM agent_memory am
+       JOIN agents a ON a.id = am.agent_id
+       WHERE a.slug = $1
+       ORDER BY am.created_at DESC
+       LIMIT $2`,
+      [slug, parseInt(limit, 10)]
+    );
+    res.json(result.rows);
+  });
+
+  // --- GPU status ---
+  app.get('/api/gpu', (_req: Request, res: Response) => {
+    res.json(getGPUStatus());
+  });
+
+  // --- LLM queue status ---
+  app.get('/api/queue', (_req: Request, res: Response) => {
+    res.json(getQueueStatus());
+  });
+
+  // --- Heartbeat (last Alex heartbeat from unified_memory) ---
+  app.get('/api/heartbeat', async (_req: Request, res: Response) => {
+    const result = await query(
+      `SELECT um.created_at, a.slug as agent_slug
+       FROM unified_memory um
+       JOIN agents a ON a.id = um.author_agent_id
+       WHERE um.event_type = 'heartbeat'
+       ORDER BY um.created_at DESC
+       LIMIT 1`
+    );
+    const row = result.rows[0] as { created_at: string; agent_slug: string } | undefined;
+    res.json(row ? { last_heartbeat: row.created_at, agent: row.agent_slug } : { last_heartbeat: null, agent: null });
+  });
+
   // --- Health ---
   app.get('/health', (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
 
@@ -281,6 +323,9 @@ export async function startApiServer(): Promise<void> {
   // Poll DB every 2s and push updates to connected WS clients
   const pollInterval = setInterval(pollAndBroadcast, 2000);
 
+  // Start GPU resource manager
+  startResourceManager();
+
   httpServer.listen(PORT, () => {
     console.log(`[API] Mission Control API listening on http://localhost:${PORT}`);
     console.log(`[API] WebSocket available at ws://localhost:${PORT}`);
@@ -289,6 +334,7 @@ export async function startApiServer(): Promise<void> {
   process.on('SIGINT', async () => {
     console.log('\n[API] Shutting down...');
     clearInterval(pollInterval);
+    stopResourceManager();
     wss.close();
     httpServer.close();
     await pool.end();

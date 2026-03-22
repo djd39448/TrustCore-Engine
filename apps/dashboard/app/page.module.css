@@ -46,6 +46,74 @@
   display: inline-block;
 }
 
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 0.1rem;
+  flex: 1;
+  padding: 0 1rem;
+}
+
+.tab {
+  background: none;
+  border: none;
+  color: #64748b;
+  font-size: 0.78rem;
+  font-weight: 500;
+  padding: 0.3rem 0.7rem;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s;
+}
+.tab:hover { color: #e2e8f0; background: #1e293b; }
+
+.tabActive {
+  color: #e2e8f0;
+  background: #1e293b;
+  font-weight: 700;
+}
+
+.headerRight {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-shrink: 0;
+}
+
+.heartbeat {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.hbDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.hbLabel {
+  font-size: 0.7rem;
+  color: #94a3b8;
+  white-space: nowrap;
+}
+
+.placeholder {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0f172a;
+}
+
+.placeholderText {
+  font-size: 0.9rem;
+  color: #334155;
+  margin: 0;
+}
+
 .body {
   flex: 1;
   display: flex;

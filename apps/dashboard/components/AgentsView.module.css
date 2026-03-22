@@ -1,0 +1,169 @@
+.view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #0f172a;
+  padding: 1.25rem;
+}
+
+.heading {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #94a3b8;
+  margin: 0 0 1rem;
+}
+
+.list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.card {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+}
+
+.cardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  margin-bottom: 0.35rem;
+}
+
+.cardLeft {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.typeBadge {
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #fff;
+  padding: 2px 6px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.name {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.statusDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.cardRight {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.model {
+  font-size: 0.65rem;
+  color: #6366f1;
+  background: #1e1b4b;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: monospace;
+}
+
+.chevron {
+  font-size: 0.55rem;
+  color: #475569;
+}
+
+.desc {
+  font-size: 0.72rem;
+  color: #64748b;
+  margin: 0 0 0.4rem;
+  line-height: 1.4;
+}
+
+.meta {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.metaItem {
+  font-size: 0.65rem;
+  color: #475569;
+}
+
+.metaItem code {
+  color: #94a3b8;
+  font-family: monospace;
+}
+
+.drawer {
+  margin-top: 0.75rem;
+  border-top: 1px solid #334155;
+  padding-top: 0.6rem;
+}
+
+.drawerHeading {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #475569;
+  margin: 0 0 0.5rem;
+}
+
+.drawerList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.drawerItem {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-size: 0.68rem;
+  line-height: 1.4;
+}
+
+.drawerType {
+  color: #6366f1;
+  flex-shrink: 0;
+  font-weight: 600;
+}
+
+.drawerSummary {
+  color: #94a3b8;
+  flex: 1;
+}
+
+.drawerTime {
+  color: #475569;
+  flex-shrink: 0;
+}
+
+.drawerError { color: #ef4444; font-size: 0.75rem; margin: 0; }
+.drawerMuted { color: #64748b; font-size: 0.75rem; margin: 0; }
+
+.error { color: #ef4444; font-size: 0.8rem; margin: 0 0 0.5rem; }
+.muted { color: #64748b; font-size: 0.8rem; margin: 0; }

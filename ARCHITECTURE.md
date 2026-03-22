@@ -579,6 +579,26 @@ Multiple hypotheses compete simultaneously. The best one gets promoted. The othe
 
 ---
 
+## Part 5b: Infrastructure Safety Settings
+
+These settings exist to prevent resource exhaustion that would crash the entire system. Do not remove them.
+
+### OLLAMA_MAX_LOADED_MODELS
+
+`OLLAMA_MAX_LOADED_MODELS: "1"` is set on the Ollama Docker service in docker-compose.yml.
+
+**Why it exists:** Without this setting, Ollama will load a new model into VRAM for every request that names a different model. With agents requesting qwen3.5:35b-a3b, qwen3.5:9b, nomic-embed-text, and trustcore-agent-v1 simultaneously, Ollama will attempt to fit all of them in VRAM at once. An RTX 3090 has 24 GB VRAM. qwen3.5:35b-a3b alone uses ~20 GB. Loading two large models simultaneously causes an OOM crash that kills the Ollama container and takes all inference offline until manually restarted.
+
+**What it does:** Forces Ollama to evict the current model before loading the next. Requests that arrive while a model is loading queue automatically. There is a small latency cost on model switches (10-30 seconds) but the system never crashes due to VRAM exhaustion.
+
+**Do not remove this setting.** If you need to run multiple models simultaneously, add a second Ollama instance on a separate GPU and route requests to the appropriate instance.
+
+### LLM Request Timeout
+
+All LLM calls in `src/llm/client.ts` have a 120-second hard timeout enforced via `AbortController`. If an Ollama request hangs (network stall, model deadlock, OOM swap), the call is aborted after 120 seconds and returns `null`. The calling agent logs the timeout and moves on to the next task. Without this timeout, a single hung LLM call blocks the agent loop indefinitely, causing tasks to pile up in `in_progress` status with no way to recover without a container restart.
+
+---
+
 ## Part 6: Mission Control Integration
 
 Mission Control is the Next.js dashboard that gives humans and agents a shared view of the system. It reads from TrustCore Engine via the mission-control MCP server.
