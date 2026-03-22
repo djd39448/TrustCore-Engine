@@ -13,7 +13,7 @@ function normalizeOllamaHost(raw: string): string {
 }
 
 const OLLAMA_HOST = normalizeOllamaHost(process.env['OLLAMA_HOST'] ?? 'localhost:11434');
-const LLM_MODEL = process.env['LLM_MODEL'] ?? 'llama3.2';
+const LLM_MODEL = process.env['LLM_MODEL'] ?? 'qwen2.5-coder:32b';
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';

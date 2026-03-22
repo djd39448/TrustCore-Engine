@@ -75,7 +75,7 @@ export const config = {
   /** Embedding model (always has a :tag suffix) */
   embeddingModel: normalizeModelName(envOptional('EMBEDDING_MODEL', 'nomic-embed-text')),
   /** LLM chat/completion model */
-  llmModel: envOptional('LLM_MODEL', 'llama3.2'),
+  llmModel: envOptional('LLM_MODEL', 'qwen2.5-coder:32b'),
 
   // --- Agent behaviour ---
   /** Heartbeat interval for Alex in milliseconds */

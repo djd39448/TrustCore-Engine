@@ -1,5 +1,8 @@
 version: '3.9'
 
+x-db-url: &db-url
+  DATABASE_URL: postgresql://${POSTGRES_USER:-trustcore}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-trustcore_memory}
+
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -27,7 +30,7 @@ services:
     ports:
       - "11434:11434"
     volumes:
-      - ollama:/root/.ollama
+      - /mnt/c/Users/Admin/.ollama:/root/.ollama
     restart: unless-stopped
 
   alex:
@@ -40,7 +43,9 @@ services:
     command: ["node", "--loader", "ts-node/esm", "src/index.ts", "alex"]
     env_file: .env
     environment:
+      <<: *db-url
       OLLAMA_HOST: http://ollama:11434
+      LLM_MODEL: "qwen3.5:35b-a3b"
     depends_on:
       postgres:
         condition: service_healthy
@@ -58,7 +63,9 @@ services:
     command: ["node", "--loader", "ts-node/esm", "src/index.ts", "research"]
     env_file: .env
     environment:
+      <<: *db-url
       OLLAMA_HOST: http://ollama:11434
+      LLM_MODEL: "qwen3.5:9b"
     depends_on:
       postgres:
         condition: service_healthy
@@ -74,6 +81,7 @@ services:
     command: ["node", "--loader", "ts-node/esm", "src/index.ts"]
     env_file: .env
     environment:
+      <<: *db-url
       OLLAMA_HOST: http://ollama:11434
     ports:
       - "3001:3001"
@@ -92,7 +100,9 @@ services:
     command: ["node", "--loader", "ts-node/esm", "src/index.ts", "email-writer"]
     env_file: .env
     environment:
+      <<: *db-url
       OLLAMA_HOST: http://ollama:11434
+      LLM_MODEL: "qwen3.5:9b"
     depends_on:
       postgres:
         condition: service_healthy
@@ -108,10 +118,11 @@ services:
     command: ["node", "--loader", "ts-node/esm", "src/index.ts", "api"]
     env_file: .env
     environment:
+      <<: *db-url
       OLLAMA_HOST: http://ollama:11434
-      API_PORT: "3002"
+      API_PORT: "3003"
     ports:
-      - "3002:3002"
+      - "3003:3003"
     depends_on:
       postgres:
         condition: service_healthy
@@ -119,4 +130,3 @@ services:
 
 volumes:
   pgdata:
-  ollama:

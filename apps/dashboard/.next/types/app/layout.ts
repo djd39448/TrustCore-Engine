@@ -1,4 +1,4 @@
-// File: C:\Users\trustcore-rdp\TrustCore-Engine\apps\dashboard\app\layout.tsx
+// File: /mnt/c/Users/trustcore-rdp/TrustCore-Engine/apps/dashboard/app/layout.tsx
 import * as entry from '../../../app/layout.js'
 import type { ResolvingMetadata, ResolvingViewport } from 'next/dist/lib/metadata/types/metadata-interface.js'
 

@@ -140,10 +140,11 @@ export async function startApiServer(): Promise<void> {
   });
 
   app.post('/api/tasks', async (req: Request, res: Response) => {
-    const { title, description, assigned_to } = req.body as {
+    const { title, description, assigned_to, assignee } = req.body as {
       title?: string;
       description?: string;
       assigned_to?: string;
+      assignee?: string;
     };
 
     if (!title) {
@@ -161,9 +162,13 @@ export async function startApiServer(): Promise<void> {
       return;
     }
 
+    const slug = assignee ?? assigned_to;
     let assignedToId: string | null = null;
-    if (assigned_to) {
-      const ag = await query<{ id: string }>(`SELECT id FROM agents WHERE slug = $1`, [assigned_to]);
+    if (slug) {
+      const ag = await query<{ id: string }>(
+        `SELECT id FROM agents WHERE slug = $1 AND is_active = true`,
+        [slug]
+      );
       assignedToId = ag.rows[0]?.id ?? null;
     }
 

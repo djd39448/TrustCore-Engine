@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import useSWR, { mutate } from 'swr';
 import { fetcher, createTask } from '@/lib/api';
-import type { Task } from '@/lib/types';
+import type { Task, Agent } from '@/lib/types';
 import styles from './TaskBoard.module.css';
 
 const COLUMNS: { key: Task['status']; label: string; color: string }[] = [
@@ -66,17 +66,26 @@ function TaskCard({ task }: { task: Task }) {
 function NewTaskModal({ onClose }: { onClose: () => void }) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [assignedTo, setAssignedTo] = useState('alex');
+  const [assignedTo, setAssignedTo] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  const { data: agents } = useSWR<Agent[]>('/api/agents', fetcher);
+  const activeAgents = (agents ?? []).filter((a) => a.is_active);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!title.trim()) return;
     setSubmitting(true);
+    setSubmitError(null);
     try {
       await createTask(title.trim(), description.trim() || undefined, assignedTo || undefined);
       await mutate('/api/tasks?limit=100');
       onClose();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('[TaskBoard] createTask failed:', err);
+      setSubmitError(msg);
     } finally {
       setSubmitting(false);
     }
@@ -115,11 +124,16 @@ function NewTaskModal({ onClose }: { onClose: () => void }) {
               value={assignedTo}
               onChange={(e) => setAssignedTo(e.target.value)}
             >
-              <option value="alex">Alex (chief)</option>
-              <option value="research">Research Agent</option>
               <option value="">Unassigned</option>
+              <option value="dave">Dave (owner)</option>
+              {activeAgents.map((agent) => (
+                <option key={agent.id} value={agent.slug}>
+                  {agent.display_name}
+                </option>
+              ))}
             </select>
           </label>
+          {submitError && <p className={styles.errorMsg}>{submitError}</p>}
           <div className={styles.formActions}>
             <button type="button" className={styles.btnCancel} onClick={onClose}>
               Cancel

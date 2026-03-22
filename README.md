@@ -24,7 +24,7 @@ bash scripts/migrate.sh
 docker exec trustcore-postgres psql -U trustcore -d trustcore_memory -f /migrations/seed.sql
 
 # 5. Pull Ollama models (first time only)
-docker exec trustcore-ollama ollama pull llama3.2
+docker exec trustcore-ollama ollama pull qwen2.5-coder:32b
 docker exec trustcore-ollama ollama pull nomic-embed-text
 
 # 6. Install Node dependencies
@@ -79,7 +79,7 @@ cd apps/dashboard && npm install && npm run dev
            │  dispatch() → child task in DB → sub-agent polls
 ┌──────────▼──────┐
 │  Ollama  (LLM)  │
-│  llama3.2       │
+│  qwen2.5-coder:32b │
 │  nomic-embed    │
 │  (port 11434)   │
 └─────────────────┘
@@ -210,7 +210,7 @@ This keeps the shared memory searchable without unbounded growth.
 | `DB_POOL_MAX` | `10` | Max DB pool connections |
 | `OLLAMA_HOST` | `localhost:11434` | Ollama server URL (http:// added automatically) |
 | `EMBEDDING_MODEL` | `nomic-embed-text` | Embedding model (`:latest` appended if no tag) |
-| `LLM_MODEL` | `llama3.2` | LLM chat model for Alex and sub-agents |
+| `LLM_MODEL` | `qwen2.5-coder:32b` | LLM chat model for Alex and sub-agents |
 | `EMAIL_WRITER_MODEL` | `(LLM_MODEL)` | Override model for Email Writer specifically |
 | `ALEX_HEARTBEAT_MS` | `60000` | Alex heartbeat interval in ms |
 | `RESEARCH_POLL_MS` | `30000` | Sub-agent poll interval in ms |
