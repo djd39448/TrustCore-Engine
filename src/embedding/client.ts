@@ -35,7 +35,7 @@ export async function embed(text: string): Promise<number[] | null> {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: EMBEDDING_MODEL, prompt: text }),
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(30_000),
     });
 
     if (!res.ok) {

@@ -2,13 +2,10 @@ import { pool, query } from '../../db/client.js';
 import { writeUnifiedMemory, updateTask, resolveAgentId } from '../../mcp/tools.js';
 import { classifyTaskIntent, prompt } from '../../llm/client.js';
 import { dispatch } from '../registry.js';
-import { evaluate } from '../eval/index.js';
 
 const HEARTBEAT_INTERVAL_MS = 60_000; // 1 minute
 const CONSOLIDATION_AGE_DAYS = 7;
 const CONSOLIDATION_BATCH = 50;
-const EVAL_POLL_TIMEOUT_MS = parseInt(process.env['EVAL_POLL_TIMEOUT_MS'] ?? '90000', 10);
-const EVAL_POLL_INTERVAL_MS = 3_000;
 
 // ---------------------------------------------------------------------------
 // Alex main loop
@@ -185,29 +182,50 @@ async function orchestrateTask(task: {
       task.description ?? undefined
     );
 
-    console.log(`[Alex] Delegated '${task.title}' → ${targetAgent} (sub-task ${subTaskId})`);
-
-    // Poll for sub-task completion (timeout via EVAL_POLL_TIMEOUT_MS)
-    const maxPolls = Math.ceil(EVAL_POLL_TIMEOUT_MS / EVAL_POLL_INTERVAL_MS);
-    let subStatus = 'pending';
+    // Poll for sub-task completion
+    const POLL_TIMEOUT_MS = parseInt(process.env['EVAL_POLL_TIMEOUT_MS'] ?? '120000');
+    const POLL_INTERVAL_MS = 5000;
+    const maxPolls = Math.floor(POLL_TIMEOUT_MS / POLL_INTERVAL_MS);
     let subResult: unknown = null;
+    let subStatus = 'pending';
 
     for (let i = 0; i < maxPolls; i++) {
-      await new Promise<void>((r) => setTimeout(r, EVAL_POLL_INTERVAL_MS));
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
       const sub = await query<{ status: string; result: unknown }>(
-        `SELECT status, result FROM tasks WHERE id = $1`,
-        [subTaskId]
+        `SELECT status, result FROM tasks WHERE id = $1`, [subTaskId]
       );
       subStatus = sub.rows[0]?.status ?? 'pending';
-      subResult = sub.rows[0]?.result ?? null;
+      subResult = sub.rows[0]?.result;
       if (subStatus === 'completed' || subStatus === 'failed') break;
+      console.log(`[Alex] Waiting for sub-task ${subTaskId} (${i + 1}/${maxPolls})...`);
     }
 
-    console.log(`[Alex] Sub-task ${subTaskId} finished with status: ${subStatus}`);
+    // Sub-task timed out — mark both tasks failed, write alert, do not run eval
+    if (subStatus !== 'completed' && subStatus !== 'failed') {
+      console.log(`[Alex] Task timed out — marking as failed, not complete`);
+      await updateTask(subTaskId, 'failed', {
+        error: 'timeout',
+        message: 'Sub-task did not complete within poll window',
+      });
+      await updateTask(task.id, 'failed', {
+        error: 'timeout',
+        agent: targetAgent,
+        sub_task_id: subTaskId,
+      });
+      await writeUnifiedMemory(
+        'alex',
+        'system_alert',
+        `Task timeout: ${task.title} — sub-agent ${targetAgent} did not complete in time`,
+        { task_id: task.id, sub_task_id: subTaskId, agent: targetAgent, polls: maxPolls },
+        5
+      );
+      return;
+    }
 
-    // Run eval when sub-task completed successfully
+    // Run eval if sub-task completed successfully
     if (subStatus === 'completed' && subResult) {
       try {
+        const { evaluate } = await import('../eval/index.js');
         const evalResult = await evaluate({
           taskId: subTaskId,
           taskTitle: task.title,
@@ -215,31 +233,16 @@ async function orchestrateTask(task: {
           producerAgentSlug: targetAgent,
           result: subResult,
         });
+        console.log(`[Alex] Eval complete: ${evalResult.composite_score.toFixed(2)} → ${evalResult.outcome}`);
 
-        console.log(`[Alex] Eval: composite=${evalResult.composite_score} outcome=${evalResult.outcome}`);
-
-        if (evalResult.outcome === 'needs_review' || evalResult.outcome === 'needs_revision') {
-          await writeUnifiedMemory(
-            'alex',
-            'observation',
-            `Eval flagged task for review: ${task.title}`,
-            {
-              task_id: subTaskId,
-              eval_id: evalResult.evalId,
-              composite: evalResult.composite_score,
-              outcome: evalResult.outcome,
-              suggestions: evalResult.improvement_suggestions,
-            },
-            4
-          );
+        if (evalResult.outcome === 'needs_review') {
+          console.log(`[Alex] Flagging task for human review`);
         }
-      } catch (evalErr) {
-        // Eval failure must never crash the agent loop
-        console.error(`[Alex] Eval error (non-fatal):`, evalErr);
+      } catch (err) {
+        console.error(`[Alex] Eval failed (non-fatal):`, err);
       }
     }
 
-    // Mark the parent task completed
     await updateTask(task.id, 'completed', {
       delegated_to: targetAgent,
       sub_task_id: subTaskId,
