@@ -136,7 +136,8 @@ export async function readUnifiedMemory(
              um.summary, um.content, um.importance, um.created_at
       FROM unified_memory um
       WHERE ${where}
-      ORDER BY um.embedding <=> $${params.length}::vector NULLS LAST
+      ORDER BY (CASE WHEN um.embedding IS NOT NULL THEN um.embedding <=> $${params.length}::vector END) NULLS LAST,
+               um.importance DESC, um.created_at DESC
       LIMIT $${params.length - 1}
     `;
   } else {
@@ -218,7 +219,8 @@ export async function readOwnMemory(
       SELECT id, agent_id, memory_type, summary, content, importance, created_at
       FROM agent_memory
       WHERE agent_id = $1 AND is_archived = false
-      ORDER BY embedding <=> $2::vector NULLS LAST
+      ORDER BY (CASE WHEN embedding IS NOT NULL THEN embedding <=> $2::vector END) NULLS LAST,
+               importance DESC, created_at DESC
       LIMIT $3
     `;
     params = [agentId, toVectorLiteral(queryEmbedding), limit];
@@ -391,7 +393,8 @@ export async function searchKnowledgeBase(
       SELECT id, agent_id, title, content, source, created_at
       FROM knowledge_base kb
       WHERE ${agentFilter}
-      ORDER BY kb.embedding <=> $${params.length}::vector NULLS LAST
+      ORDER BY (CASE WHEN kb.embedding IS NOT NULL THEN kb.embedding <=> $${params.length}::vector END) NULLS LAST,
+               kb.created_at DESC
       LIMIT $1
     `;
   } else {

@@ -10,6 +10,7 @@ import AgentsView from '@/components/AgentsView';
 import OfficeView from '@/components/OfficeView';
 import StatsView from '@/components/StatsView';
 import DocsView from '@/components/DocsView';
+import CalendarView from '@/components/CalendarView';
 import { fetcher, WS_URL } from '@/lib/api';
 import type { WsMessage } from '@/lib/types';
 import styles from './page.module.css';
@@ -114,7 +115,7 @@ export default function Home() {
       case 'tasks': return <TaskBoard liveTaskIds={liveTaskIds} />;
       case 'memories': return <MemoryView />;
       case 'team': return <AgentsView />;
-      case 'calendar': return <PlaceholderView name="Calendar" />;
+      case 'calendar': return <CalendarView />;
       case 'projects': return <StatsView />;
       case 'docs': return <DocsView />;
       case 'office': return <OfficeView />;

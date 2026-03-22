@@ -14,6 +14,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { pool, query } from '../db/client.js';
 import { getGPUStatus, startResourceManager, stopResourceManager } from '../resource-manager/index.js';
 import { getQueueStatus } from '../resource-manager/queue.js';
+import { embed, toVectorLiteral } from '../embedding/client.js';
 
 const PORT = parseInt(process.env['API_PORT'] ?? '3002', 10);
 
@@ -275,6 +276,77 @@ export async function startApiServer(): Promise<void> {
       params
     );
     res.json(result.rows);
+  });
+
+  // --- Knowledge base ingestion via API ---
+  app.post('/api/knowledge', async (req: Request, res: Response) => {
+    const { title, content, source } = req.body as {
+      title?: string; content?: string; source?: string;
+    };
+
+    if (!title || !content || !source) {
+      res.status(400).json({ error: 'title, content, and source are required' });
+      return;
+    }
+
+    // Split into ~500-char chunks on paragraph boundaries
+    const CHUNK_SIZE = 500;
+    const paragraphs = content.split(/\n{2,}/).filter((p: string) => p.trim().length > 0);
+    const chunks: string[] = [];
+    let current = '';
+    for (const para of paragraphs) {
+      if (current.length + para.length > CHUNK_SIZE && current.length > 0) {
+        chunks.push(current.trim());
+        current = para;
+      } else {
+        current = current ? `${current}\n\n${para}` : para;
+      }
+    }
+    if (current.trim()) chunks.push(current.trim());
+    if (chunks.length === 0) chunks.push(content.trim());
+
+    const inserted: string[] = [];
+    for (let i = 0; i < chunks.length; i++) {
+      const chunkText = chunks[i]!;
+      const embedding = await embed(chunkText);
+      const embeddingParam = embedding ? toVectorLiteral(embedding) : null;
+      const chunkTitle = chunks.length === 1 ? title : `${title} (${i + 1}/${chunks.length})`;
+      const result = await query<{ id: string }>(
+        `INSERT INTO knowledge_base (title, content, source, chunk_index, embedding, embedding_model)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+        [chunkTitle, chunkText, source, i, embeddingParam, embeddingParam ? 'nomic-embed-text' : null]
+      );
+      inserted.push(result.rows[0]!.id);
+    }
+
+    res.status(201).json({ chunks: inserted.length, ids: inserted, source });
+  });
+
+  // --- Task activity (for calendar view) ---
+  app.get('/api/activity', async (req: Request, res: Response) => {
+    const hours = Math.min(parseInt((req.query as Record<string, string>)['hours'] ?? '48', 10), 720);
+    const result = await query(
+      `SELECT
+         date_trunc('hour', created_at) AS hour,
+         COUNT(*) FILTER (WHERE status IN ('completed','failed','in_progress','pending')) AS created,
+         COUNT(*) FILTER (WHERE status = 'completed' AND completed_at IS NOT NULL) AS completed,
+         COUNT(*) FILTER (WHERE status = 'failed') AS failed
+       FROM tasks
+       WHERE created_at > NOW() - ($1 || ' hours')::interval
+       GROUP BY 1
+       ORDER BY 1 ASC`,
+      [hours]
+    );
+    // Also return last 20 tasks for the timeline list
+    const recent = await query(
+      `SELECT t.id, t.title, t.status, t.created_at, t.completed_at, t.started_at,
+              a.slug as assigned_to, a.display_name as agent_name
+       FROM tasks t
+       LEFT JOIN agents a ON a.id = t.assigned_to_agent_id
+       ORDER BY t.created_at DESC
+       LIMIT 20`
+    );
+    res.json({ hourly: result.rows, recent: recent.rows });
   });
 
   // --- Agent memories (individual agent_memory journal) ---

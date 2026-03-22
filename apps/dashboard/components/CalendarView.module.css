@@ -1,0 +1,251 @@
+.container {
+  flex: 1;
+  display: flex;
+  gap: 1rem;
+  padding: 1.25rem;
+  overflow: hidden;
+}
+
+.left {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.right {
+  width: 280px;
+  flex-shrink: 0;
+}
+
+.heading {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #94a3b8;
+  margin: 0;
+}
+
+.subheading {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #64748b;
+  margin: 0;
+}
+
+.empty {
+  font-size: 0.75rem;
+  color: #475569;
+  margin: 0;
+  padding: 0.5rem 0;
+}
+
+/* Activity chart */
+.chart {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  height: 160px;
+}
+
+.chartBars {
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  overflow: hidden;
+}
+
+.barCol {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  height: 100%;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.barStack {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  border-radius: 2px 2px 0 0;
+  overflow: hidden;
+  transition: height 0.3s ease;
+}
+
+.barSegment {
+  min-height: 2px;
+}
+
+.barLabel {
+  font-size: 0.48rem;
+  color: #475569;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  transform: rotate(180deg);
+  white-space: nowrap;
+  overflow: hidden;
+  max-height: 32px;
+}
+
+.chartLegend {
+  display: flex;
+  gap: 0.75rem;
+  font-size: 0.63rem;
+  color: #64748b;
+}
+
+/* Timeline */
+.timeline {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 0.4rem 0;
+}
+
+.timelineItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.45rem 0.75rem;
+  border-bottom: 1px solid #0f172a;
+}
+
+.timelineItem:last-child { border-bottom: none; }
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+
+.timelineBody {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.timelineTitle {
+  font-size: 0.75rem;
+  color: #e2e8f0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timelineMeta {
+  font-size: 0.63rem;
+  color: #64748b;
+}
+
+.statusBadge {
+  font-size: 0.6rem;
+  font-weight: 600;
+  flex-shrink: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Ingest panel */
+.ingestPanel {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 0.875rem;
+}
+
+.ingestTitle {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #94a3b8;
+  margin: 0 0 0.75rem;
+}
+
+.ingestForm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.ingestInput {
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 5px;
+  padding: 0.4rem 0.65rem;
+  color: #e2e8f0;
+  font-size: 0.78rem;
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+
+.ingestInput:focus { border-color: #6366f1; }
+
+.ingestTextarea {
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 5px;
+  padding: 0.4rem 0.65rem;
+  color: #e2e8f0;
+  font-size: 0.75rem;
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  font-family: inherit;
+  line-height: 1.4;
+  transition: border-color 0.15s;
+}
+
+.ingestTextarea:focus { border-color: #6366f1; }
+
+.ingestBtn {
+  background: #6366f1;
+  border: none;
+  color: #fff;
+  border-radius: 5px;
+  padding: 0.45rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.ingestBtn:hover { background: #4f46e5; }
+.ingestBtn:disabled { opacity: 0.6; cursor: default; }
+
+.msgOk {
+  font-size: 0.7rem;
+  color: #22c55e;
+  margin: 0;
+}
+
+.msgErr {
+  font-size: 0.7rem;
+  color: #f87171;
+  margin: 0;
+}
