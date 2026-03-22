@@ -70,8 +70,12 @@ export const config = {
   dbPoolMax: envInt('DB_POOL_MAX', 10),
 
   // --- Ollama ---
-  /** Normalized Ollama base URL (http://host:port, no trailing slash) */
+  /** Normalized Ollama base URL — points to GPU1 (Alex's permanent home) for backwards compat */
   ollamaHost: normalizeOllamaHost(envOptional('OLLAMA_HOST', 'localhost:11434')),
+  /** GPU0 — shared execution pool for sub-agents and factory */
+  ollamaHostGpu0: normalizeOllamaHost(envOptional('OLLAMA_HOST_GPU0', 'http://ollama-gpu0:11434')),
+  /** GPU1 — Alex's permanent home, reserved models only */
+  ollamaHostGpu1: normalizeOllamaHost(envOptional('OLLAMA_HOST_GPU1', 'http://ollama-gpu1:11434')),
   /** Embedding model (always has a :tag suffix) */
   embeddingModel: normalizeModelName(envOptional('EMBEDDING_MODEL', 'nomic-embed-text')),
   /** LLM chat/completion model */

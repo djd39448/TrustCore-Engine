@@ -20,17 +20,47 @@ services:
       retries: 5
     restart: unless-stopped
 
-  ollama:
+  ollama-gpu1:
     image: ollama/ollama:latest
-    container_name: trustcore-ollama
-    environment:
-      OLLAMA_HOST: 0.0.0.0:11434
-      OLLAMA_MAX_LOADED_MODELS: "1"
+    container_name: trustcore-ollama-gpu1
+    restart: unless-stopped
     ports:
       - "11434:11434"
     volumes:
       - C:/Users/Admin/.ollama:/root/.ollama
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_KEEP_ALIVE: "-1"
+      NVIDIA_VISIBLE_DEVICES: "1"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['1']
+              capabilities: [gpu]
+
+  ollama-gpu0:
+    image: ollama/ollama:latest
+    container_name: trustcore-ollama-gpu0
     restart: unless-stopped
+    ports:
+      - "11435:11434"
+    volumes:
+      - C:/Users/Admin/.ollama:/root/.ollama
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_MAX_LOADED_MODELS: "8"
+      OLLAMA_KEEP_ALIVE: "0"
+      NVIDIA_VISIBLE_DEVICES: "0"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
 
   alex:
     build:
@@ -43,12 +73,13 @@ services:
     env_file: .env
     environment:
       <<: *db-url
-      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_HOST: http://ollama-gpu1:11434
       LLM_MODEL: "qwen3.5:35b-a3b"
+      EVAL_POLL_TIMEOUT_MS: "300000"
     depends_on:
       postgres:
         condition: service_healthy
-      ollama:
+      ollama-gpu1:
         condition: service_started
     restart: unless-stopped
 
@@ -63,12 +94,12 @@ services:
     env_file: .env
     environment:
       <<: *db-url
-      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_HOST: http://ollama-gpu0:11434
       LLM_MODEL: "qwen3.5:9b"
     depends_on:
       postgres:
         condition: service_healthy
-      ollama:
+      ollama-gpu0:
         condition: service_started
     restart: unless-stopped
 
@@ -81,12 +112,14 @@ services:
     env_file: .env
     environment:
       <<: *db-url
-      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_HOST: http://ollama-gpu1:11434
     ports:
       - "3001:3001"
     depends_on:
       postgres:
         condition: service_healthy
+      ollama-gpu1:
+        condition: service_started
     restart: "no"
 
   email-writer:
@@ -100,12 +133,12 @@ services:
     env_file: .env
     environment:
       <<: *db-url
-      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_HOST: http://ollama-gpu0:11434
       LLM_MODEL: "qwen3.5:9b"
     depends_on:
       postgres:
         condition: service_healthy
-      ollama:
+      ollama-gpu0:
         condition: service_started
     restart: unless-stopped
 
@@ -118,10 +151,12 @@ services:
     env_file: .env
     environment:
       <<: *db-url
-      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_HOST: http://ollama-gpu1:11434
     depends_on:
       postgres:
         condition: service_healthy
+      ollama-gpu1:
+        condition: service_started
     # nvidia-smi requires host GPU access; if unavailable the service uses mock data
     restart: unless-stopped
 
@@ -134,13 +169,15 @@ services:
     env_file: .env
     environment:
       <<: *db-url
-      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_HOST: http://ollama-gpu1:11434
       API_PORT: "3003"
     ports:
       - "3003:3003"
     depends_on:
       postgres:
         condition: service_healthy
+      ollama-gpu1:
+        condition: service_started
     restart: unless-stopped
 
   dashboard:

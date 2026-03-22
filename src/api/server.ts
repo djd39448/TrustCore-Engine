@@ -12,7 +12,7 @@ import express, { type Request, type Response } from 'express';
 import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { pool, query } from '../db/client.js';
-import { getGPUStatus, startResourceManager, stopResourceManager } from '../resource-manager/index.js';
+import { getGPUStatus, getDualGPUStatus, startResourceManager, stopResourceManager } from '../resource-manager/index.js';
 import { getQueueStatus } from '../resource-manager/queue.js';
 import { embed, toVectorLiteral } from '../embedding/client.js';
 
@@ -406,10 +406,13 @@ export async function startApiServer(): Promise<void> {
     res.json(result.rows);
   });
 
-  // --- GPU status ---
+  // --- GPU status (dual-GPU format) ---
   app.get('/api/gpu', async (_req: Request, res: Response) => {
     const mem = getGPUStatus();
-    if (mem.length > 0) { res.json(mem); return; }
+    if (mem.length > 0) {
+      res.json(getDualGPUStatus());
+      return;
+    }
     // Fall back to latest DB row per GPU (when resource-manager runs separately)
     const result = await query(
       `SELECT DISTINCT ON (gpu_index)
@@ -420,7 +423,30 @@ export async function startApiServer(): Promise<void> {
        FROM gpu_metrics
        ORDER BY gpu_index, recorded_at DESC`
     );
-    res.json(result.rows);
+    // Wrap legacy rows in dual-GPU shape
+    const rows = result.rows as Array<{ index: number; memoryUsedMb: number; memoryFreeMb: number; memoryTotalMb: number; utilizationPct: number }>;
+    const gpu0row = rows.find((r) => r.index === 0);
+    const gpu1row = rows.find((r) => r.index === 1);
+    res.json({
+      gpu0: {
+        vram_total_mb: gpu0row?.memoryTotalMb ?? 24576,
+        vram_used_mb: gpu0row?.memoryUsedMb ?? 0,
+        vram_available_mb: gpu0row ? Math.max(0, (gpu0row.memoryTotalMb - 2048) - gpu0row.memoryUsedMb) : 22528,
+        utilization_pct: gpu0row?.utilizationPct ?? 0,
+        available_slots: {},
+        queue_depth: 0,
+        role: 'shared_execution_pool',
+      },
+      gpu1: {
+        vram_total_mb: gpu1row?.memoryTotalMb ?? 24576,
+        vram_used_mb: gpu1row?.memoryUsedMb ?? 0,
+        vram_available_mb: gpu1row?.memoryFreeMb ?? 24576,
+        utilization_pct: gpu1row?.utilizationPct ?? 0,
+        available_slots: {},
+        queue_depth: 0,
+        role: 'alex_permanent_home',
+      },
+    });
   });
 
   // --- GPU metrics history ---
