@@ -4,6 +4,17 @@
 
 All phases complete as of 2026-03-22. Both test suites passing (28/28). TypeScript clean.
 
+### Session 3 — 2026-03-22 Agent Activation + Web Search
+
+**Fix 1** — Ollama volume mount: `docker-compose.yml` changed `/mnt/c/Users/Admin/.ollama` → `C:/Users/Admin/.ollama`; models (qwen3.5:35b, qwen3.5:9b, nomic-embed-text) now visible inside container
+**Fix 2** — Alex unassigned task pickup: `pollPendingTasks` used `JOIN` that silently skipped tasks with `NULL assigned_to_agent_id`; changed to `LEFT JOIN ... OR IS NULL`
+**Fix 3** — LLM timeouts raised: inner AbortController 115s → 300s; queue `REQUEST_TIMEOUT_MS` 180s → 360s; large models (qwen3.5:9b, 6.6GB) need ~2 min to swap into VRAM
+**Fix 4** — `detectStubResult` tightened: stopped scanning LLM-generated text for keywords (false positives); now uses explicit `source` field markers only
+
+**Phase R1** — Research agent wired to LLM: KB lookup + qwen3.5:9b synthesis; returns real answers with KB context injection when available
+**Phase R2** — Web search added to research agent: DuckDuckGo HTML scrape (no API key), top-5 results extracted, injected as search context into LLM prompt
+**Phase R3** — Task result display in dashboard: TaskBoard cards show expandable result panel with answer text, email body, source attribution
+
 ### Session 2 — 2026-03-22 Fixes and Resource Manager
 
 **Fix 1** — Task failure detection: `SubAgent.detectStubResult()` catches `model='stub'` and body keywords, marks failed not completed
