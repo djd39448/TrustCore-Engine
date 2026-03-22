@@ -16,7 +16,9 @@ function normalizeModelName(raw: string): string {
   return raw.includes(':') ? raw : `${raw}:latest`;
 }
 
-const OLLAMA_HOST = normalizeOllamaHost(process.env['OLLAMA_HOST'] ?? 'localhost:11434');
+// Embeddings always go to gpu0 (shared pool) — never gpu1, which is reserved for Alex's 35b model.
+// OLLAMA_HOST_GPU0 is set per-container in docker-compose.yml; falls back to localhost for tests.
+const OLLAMA_HOST = normalizeOllamaHost(process.env['OLLAMA_HOST_GPU0'] ?? process.env['OLLAMA_HOST'] ?? 'localhost:11434');
 const EMBEDDING_MODEL = normalizeModelName(process.env['EMBEDDING_MODEL'] ?? 'nomic-embed-text');
 
 interface OllamaEmbedResponse {
@@ -44,8 +46,11 @@ export async function embed(text: string): Promise<number[] | null> {
     const data = (await res.json()) as OllamaEmbedResponse;
     return data.embedding ?? null;
   } catch (err) {
-    // Ollama not ready yet — embeddings will be backfilled later
-    console.warn(`[embed] Ollama unavailable: ${err instanceof Error ? err.message : String(err)}`);
+    if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+      console.warn('[embed] Timeout — writing memory without embedding');
+    } else {
+      console.warn(`[embed] Ollama unavailable: ${err instanceof Error ? err.message : String(err)}`);
+    }
     return null;
   }
 }
