@@ -6,14 +6,11 @@ import { fetcher, createTask } from '@/lib/api';
 import type { Task, Agent } from '@/lib/types';
 import styles from './TaskBoard.module.css';
 
-const API_BASE = process.env['NEXT_PUBLIC_API_URL'] ?? 'http://localhost:3003';
-
 const COLUMNS: { key: Task['status']; label: string; color: string }[] = [
   { key: 'pending', label: 'Pending', color: '#f59e0b' },
   { key: 'in_progress', label: 'In Progress', color: '#3b82f6' },
   { key: 'completed', label: 'Completed', color: '#22c55e' },
   { key: 'failed', label: 'Failed', color: '#ef4444' },
-  { key: 'cancelled', label: 'Cancelled', color: '#64748b' },
 ];
 
 function StatusPill({ status }: { status: Task['status'] }) {
@@ -25,67 +22,8 @@ function StatusPill({ status }: { status: Task['status'] }) {
   );
 }
 
-function ResultPanel({ result }: { result: Record<string, unknown> }) {
-  // Research result
-  if (typeof result['answer'] === 'string') {
-    const sources = result['web_sources'] as Array<{ title: string; url: string }> | undefined;
-    return (
-      <div className={styles.resultPanel}>
-        <div className={styles.resultSource}>
-          {String(result['source'] ?? 'llm')} · {result['kb_hits'] ? `${result['kb_hits']} KB hits` : ''}{result['web_hits'] ? `${result['web_hits']} web results` : ''}
-        </div>
-        <p className={styles.resultAnswer}>{result['answer'] as string}</p>
-        {sources && sources.length > 0 && (
-          <div className={styles.resultSources}>
-            {sources.slice(0, 3).map((s, i) => (
-              <a key={i} href={s.url} target="_blank" rel="noreferrer" className={styles.sourceLink}>
-                {s.title}
-              </a>
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  // Email result
-  if (typeof result['body'] === 'string') {
-    return (
-      <div className={styles.resultPanel}>
-        <div className={styles.resultSource}>email · {result['model'] as string}</div>
-        {typeof result['subject'] === 'string' && <p className={styles.emailSubject}>Subject: {result['subject']}</p>}
-        <pre className={styles.emailBody}>{result['body'] as string}</pre>
-      </div>
-    );
-  }
-
-  // Delegation result
-  if (typeof result['delegated_to'] === 'string') {
-    return (
-      <div className={styles.resultPanel}>
-        <p className={styles.resultMeta}>Delegated to <b>{result['delegated_to'] as string}</b></p>
-      </div>
-    );
-  }
-
-  // Error
-  if (typeof result['error'] === 'string') {
-    return (
-      <div className={styles.resultPanel}>
-        <p className={styles.resultError}>{result['error'] as string}</p>
-      </div>
-    );
-  }
-
-  // Fallback: raw JSON
-  return (
-    <pre className={styles.resultRaw}>{JSON.stringify(result, null, 2)}</pre>
-  );
-}
-
 function TaskCard({ task }: { task: Task }) {
   const [expanded, setExpanded] = useState(false);
-  const [cancelling, setCancelling] = useState(false);
 
   const duration =
     task.started_at && task.completed_at
@@ -93,19 +31,6 @@ function TaskCard({ task }: { task: Task }) {
           (new Date(task.completed_at).getTime() - new Date(task.started_at).getTime()) / 1000
         )
       : null;
-
-  const canCancel = task.status === 'pending' || task.status === 'in_progress';
-
-  async function handleCancel(e: React.MouseEvent) {
-    e.stopPropagation();
-    setCancelling(true);
-    try {
-      await fetch(`${API_BASE}/api/tasks/${task.id}/cancel`, { method: 'PATCH' });
-      await mutate('/api/tasks?limit=100');
-    } finally {
-      setCancelling(false);
-    }
-  }
 
   return (
     <div className={styles.card} onClick={() => setExpanded(!expanded)}>
@@ -123,17 +48,14 @@ function TaskCard({ task }: { task: Task }) {
           {task.description && <p className={styles.desc}>{task.description}</p>}
           <p className={styles.meta}>
             Created by: <b>{task.created_by ?? 'unknown'}</b>
-            {duration !== null && <> · Duration: <b>{duration}s</b></>}
           </p>
-          {task.result && <ResultPanel result={task.result} />}
-          {canCancel && (
-            <button
-              className={styles.btnCancelTask}
-              onClick={handleCancel}
-              disabled={cancelling}
-            >
-              {cancelling ? 'Cancelling…' : 'Cancel Task'}
-            </button>
+          {duration !== null && (
+            <p className={styles.meta}>Duration: <b>{duration}s</b></p>
+          )}
+          {task.result && (
+            <pre className={styles.result}>
+              {JSON.stringify(task.result, null, 2)}
+            </pre>
           )}
         </div>
       )}
