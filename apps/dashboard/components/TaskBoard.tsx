@@ -13,6 +13,7 @@ const COLUMNS: { key: Task['status']; label: string; color: string }[] = [
   { key: 'in_progress', label: 'In Progress', color: '#3b82f6' },
   { key: 'completed', label: 'Completed', color: '#22c55e' },
   { key: 'failed', label: 'Failed', color: '#ef4444' },
+  { key: 'cancelled', label: 'Cancelled', color: '#64748b' },
 ];
 
 function StatusPill({ status }: { status: Task['status'] }) {

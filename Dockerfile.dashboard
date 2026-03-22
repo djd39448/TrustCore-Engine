@@ -1,0 +1,22 @@
+FROM node:20-slim
+
+WORKDIR /app
+
+# Copy dashboard package files
+COPY apps/dashboard/package.json apps/dashboard/package-lock.json* ./
+
+RUN npm ci
+
+# Copy all dashboard source
+COPY apps/dashboard/ ./
+
+# Build the Next.js app
+ARG NEXT_PUBLIC_API_URL=http://localhost:3003
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+
+RUN npm run build
+
+ENV NODE_ENV=production
+EXPOSE 3000
+
+CMD ["npm", "start"]

@@ -143,5 +143,20 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:3003
+    container_name: trustcore-dashboard
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:3003
+    ports:
+      - "3004:3000"
+    depends_on:
+      - api
+    restart: unless-stopped
+
 volumes:
   pgdata:

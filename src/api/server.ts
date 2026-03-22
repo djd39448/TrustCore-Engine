@@ -507,6 +507,57 @@ export async function startApiServer(): Promise<void> {
     });
   });
 
+  // --- Chat (create task assigned to alex, long-poll up to 90s for result) ---
+  app.post('/api/chat', async (req: Request, res: Response) => {
+    const { message } = req.body as { message?: string };
+    if (!message?.trim()) {
+      res.status(400).json({ error: 'message is required' });
+      return;
+    }
+
+    const systemAgent = await query<{ id: string }>(
+      `SELECT id FROM agents WHERE slug = 'system' LIMIT 1`
+    );
+    const createdById = systemAgent.rows[0]?.id;
+    if (!createdById) {
+      res.status(500).json({ error: 'System agent not found' });
+      return;
+    }
+
+    const alexAgent = await query<{ id: string }>(
+      `SELECT id FROM agents WHERE slug = 'alex' AND is_active = true LIMIT 1`
+    );
+    const alexId = alexAgent.rows[0]?.id ?? null;
+
+    const taskResult = await query<{ id: string }>(
+      `INSERT INTO tasks (created_by_agent_id, assigned_to_agent_id, title, status)
+       VALUES ($1, $2, $3, 'pending') RETURNING id`,
+      [createdById, alexId, message.trim()]
+    );
+    const taskId = taskResult.rows[0]!.id;
+    broadcast('task_created', { id: taskId, title: message.trim(), status: 'pending' });
+
+    // Poll for up to 90s (every 1.5s = 60 polls)
+    const POLL_INTERVAL = 1500;
+    const MAX_POLLS = 60;
+    for (let i = 0; i < MAX_POLLS; i++) {
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+      const check = await query<{ status: string; result: unknown }>(
+        `SELECT status, result FROM tasks WHERE id = $1`,
+        [taskId]
+      );
+      const row = check.rows[0];
+      if (!row) break;
+      if (row.status === 'completed' || row.status === 'failed' || row.status === 'cancelled') {
+        res.json({ taskId, status: row.status, result: row.result });
+        return;
+      }
+    }
+
+    // Timed out — return taskId so client can poll independently
+    res.json({ taskId, status: 'pending', result: null, timeout: true });
+  });
+
   // --- Health ---
   app.get('/health', (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
 

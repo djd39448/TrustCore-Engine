@@ -11,6 +11,7 @@ import OfficeView from '@/components/OfficeView';
 import StatsView from '@/components/StatsView';
 import DocsView from '@/components/DocsView';
 import CalendarView from '@/components/CalendarView';
+import ChatPanel from '@/components/ChatPanel';
 import { fetcher, WS_URL } from '@/lib/api';
 import type { WsMessage } from '@/lib/types';
 import styles from './page.module.css';
@@ -156,6 +157,7 @@ export default function Home() {
         <AgentSidebar />
         {renderMain()}
         {activeTab === 'tasks' && <MemoryFeed />}
+        {activeTab === 'tasks' && <ChatPanel />}
       </div>
     </div>
   );

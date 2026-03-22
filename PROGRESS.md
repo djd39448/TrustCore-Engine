@@ -4,6 +4,13 @@
 
 All phases complete as of 2026-03-22. Both test suites passing (28/28). TypeScript clean.
 
+### Session 6 — 2026-03-22 Chat Panel + Dashboard Dockerization
+
+**Phase D1** — Dashboard Dockerized: `Dockerfile.dashboard` (Next.js build + `npm start`); `dashboard` service added to `docker-compose.yml` on port 3004 (3000 reserved for local dev); stack now fully `docker compose up -d`
+**Phase D2** — `POST /api/chat`: creates task assigned to Alex, long-polls 90s (60 × 1.5s) for completion, returns `{taskId, status, result}` or `timeout: true` if still running; refreshes task board via mutate
+**Phase D3** — `ChatPanel.tsx`: persistent conversation UI — user messages right-aligned, agent left-aligned with avatar, animated thinking dots (3-dot bounce), `pre`-formatted result text, task ID footer, Shift+Enter for newlines; wired to Tasks tab alongside MemoryFeed
+**Fix** — TaskBoard: added `cancelled` column (slate/grey) so cancelled tasks are visible in the 5th column
+
 ### Session 5 — 2026-03-22 Calendar Tab + KB Ingest + Vector Fix
 
 **Fix** — Vector search ordering: `CASE WHEN embedding IS NOT NULL THEN embedding <=> $N END NULLS LAST, importance DESC, created_at DESC` — null-embedding rows now returned correctly with stable secondary sort; fixes flaky test when heartbeat records outnumber limit
