@@ -330,6 +330,57 @@ export async function startApiServer(): Promise<void> {
     res.json(row ? { last_heartbeat: row.created_at, agent: row.agent_slug } : { last_heartbeat: null, agent: null });
   });
 
+  // --- System stats ---
+  app.get('/api/stats', async (_req: Request, res: Response) => {
+    const [agentStats, taskBreakdown, memoryStats, recentTasks] = await Promise.all([
+      // Per-agent: tasks completed/failed in last 24h + all time
+      query<{
+        slug: string; display_name: string; is_active: boolean;
+        total: string; completed: string; failed: string;
+        last_24h_completed: string; last_24h_failed: string;
+      }>(`
+        SELECT a.slug, a.display_name, a.is_active,
+               COUNT(t.id) AS total,
+               COUNT(t.id) FILTER (WHERE t.status = 'completed') AS completed,
+               COUNT(t.id) FILTER (WHERE t.status = 'failed') AS failed,
+               COUNT(t.id) FILTER (WHERE t.status = 'completed' AND t.completed_at > NOW() - INTERVAL '24 hours') AS last_24h_completed,
+               COUNT(t.id) FILTER (WHERE t.status = 'failed' AND t.completed_at > NOW() - INTERVAL '24 hours') AS last_24h_failed
+        FROM agents a
+        LEFT JOIN tasks t ON t.assigned_to_agent_id = a.id
+        WHERE a.slug != 'system'
+        GROUP BY a.id, a.slug, a.display_name, a.is_active
+        ORDER BY total DESC`),
+
+      // Overall task counts by status
+      query<{ status: string; count: string }>(
+        `SELECT status, COUNT(*) as count FROM tasks GROUP BY status ORDER BY status`),
+
+      // Memory event counts by type (last 24h vs all time)
+      query<{ event_type: string; total: string; last_24h: string }>(`
+        SELECT event_type,
+               COUNT(*) AS total,
+               COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '24 hours') AS last_24h
+        FROM unified_memory
+        WHERE is_archived = false
+        GROUP BY event_type
+        ORDER BY total DESC`),
+
+      // Last heartbeat + avg task duration
+      query<{ last_heartbeat: Date; avg_duration_s: string | null }>(`
+        SELECT
+          (SELECT MAX(created_at) FROM unified_memory WHERE event_type = 'heartbeat') AS last_heartbeat,
+          (SELECT AVG(EXTRACT(EPOCH FROM (completed_at - started_at)))
+           FROM tasks WHERE status = 'completed' AND started_at IS NOT NULL AND completed_at IS NOT NULL) AS avg_duration_s`),
+    ]);
+
+    res.json({
+      agents: agentStats.rows,
+      tasks: taskBreakdown.rows,
+      memory: memoryStats.rows,
+      system: recentTasks.rows[0] ?? {},
+    });
+  });
+
   // --- Health ---
   app.get('/health', (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
 
