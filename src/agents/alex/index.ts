@@ -93,8 +93,8 @@ async function pollPendingTasks(): Promise<void> {
   }>(
     `SELECT t.id, t.title, t.description, t.status
      FROM tasks t
-     JOIN agents a ON a.id = t.assigned_to_agent_id
-     WHERE a.slug = 'alex'
+     LEFT JOIN agents a ON a.id = t.assigned_to_agent_id
+     WHERE (a.slug = 'alex' OR t.assigned_to_agent_id IS NULL)
        AND t.status = 'pending'
      ORDER BY t.created_at ASC
      LIMIT 10`

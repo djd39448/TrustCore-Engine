@@ -147,16 +147,17 @@ export abstract class SubAgent {
     if (result === null || result === undefined) return null;
     if (typeof result !== 'object') return null;
     const r = result as Record<string, unknown>;
-    // model='stub' is set explicitly by email-writer when LLM is offline
+    // Explicit failure markers set by agents when LLM is offline
     if (r['model'] === 'stub') return 'LLM offline — email draft unavailable';
-    // Check body/answer/result fields for offline/error markers
-    const textFields = ['body', 'answer', 'result', 'content', 'text'];
-    for (const field of textFields) {
+    if (r['source'] === 'stub') return 'Agent returned stub result — LLM unavailable';
+    if (r['source'] === 'llm_unavailable') return 'LLM did not respond';
+    // Only scan non-LLM fields (body/draft may be LLM output — skip to avoid false positives)
+    const agentFields = ['error'];
+    for (const field of agentFields) {
       const val = r[field];
       if (typeof val === 'string') {
         const lower = val.toLowerCase();
-        if (lower.includes('unavailable') || lower.includes('offline') ||
-            lower.includes('[stub]') || lower.includes('[error]')) {
+        if (lower.includes('[stub]') || lower.includes('[error]')) {
           return `Result indicates failure: ${val.slice(0, 120)}`;
         }
       }

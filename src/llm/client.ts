@@ -50,8 +50,8 @@ export interface ChatMessage {
  */
 async function fetchChat(messages: ChatMessage[], model: string): Promise<string | null> {
   const controller = new AbortController();
-  // Inner timeout shorter than queue timeout so queue can report cleanly
-  const timer = setTimeout(() => controller.abort(), 115_000);
+  // Allow up to 300s — large models (9b+) need time to swap into VRAM from disk
+  const timer = setTimeout(() => controller.abort(), 300_000);
 
   try {
     const response = await fetch(`${OLLAMA_HOST}/api/chat`, {

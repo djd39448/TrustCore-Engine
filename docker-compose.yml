@@ -29,7 +29,7 @@ services:
     ports:
       - "11434:11434"
     volumes:
-      - /mnt/c/Users/Admin/.ollama:/root/.ollama
+      - C:/Users/Admin/.ollama:/root/.ollama
     restart: unless-stopped
 
   alex:

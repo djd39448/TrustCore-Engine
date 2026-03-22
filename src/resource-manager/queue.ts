@@ -11,7 +11,7 @@
  *   - Requests queue when maxConcurrent slots are full
  *   - Processed in priority order (min-heap)
  *   - Max queue depth: 50 — rejects with error beyond that
- *   - Request timeout: 180 seconds — rejects and logs task failed
+ *   - Request timeout: 360 seconds — allows large models (9b+) to load from disk
  *   - Logs queue depth to unified_memory when depth >= 3
  *   - Emits events: queued, started, completed, failed, timeout
  */
@@ -37,7 +37,7 @@ export interface QueueRequest<T = unknown> {
 const MAX_QUEUE_SIZE = 50;
 const MAX_CONCURRENT = 2;
 const LOG_DEPTH_THRESHOLD = 3;
-const REQUEST_TIMEOUT_MS = 180_000;
+const REQUEST_TIMEOUT_MS = 360_000;
 
 let active = 0;
 let requestCounter = 0;
