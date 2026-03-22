@@ -172,3 +172,51 @@
   padding: 0.5rem 1rem;
   margin: 0;
 }
+
+/* Shared / Individual toggle */
+.toggle {
+  display: flex;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.toggleBtn {
+  background: transparent;
+  border: none;
+  color: #64748b;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.3rem 0.7rem;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.toggleBtn:hover { background: #1e293b; color: #94a3b8; }
+
+.toggleActive {
+  background: #334155;
+  color: #e2e8f0;
+}
+
+/* Tier badge */
+.tierBadge {
+  font-size: 0.55rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 1px 4px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.tierBadge[data-tier="shared"] {
+  color: #64748b;
+  background: #0f172a;
+  border: 1px solid #334155;
+}
+
+.tierBadge[data-tier="individual"] {
+  color: #93c5fd;
+  background: #172554;
+  border: 1px solid #1d4ed8;
+}
