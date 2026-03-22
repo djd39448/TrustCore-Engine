@@ -226,7 +226,7 @@ Agent goes live in swarm
 
 autoresearch runs in WSL on GPU 0. It modifies `train.py`, runs 5-minute training sprints, evaluates on val_bpb (lower is better), keeps improvements, discards regressions. Overnight on an RTX 3090 it runs 100+ experiments and finds architectures that would take a human researcher weeks to find manually.
 
-**Critical:** Always use `CUDA_VISIBLE_DEVICES=0` for all training commands. GPU 1 runs Ollama and the display. They must never compete.
+**Critical:** Always use `CUDA_VISIBLE_DEVICES=0` for all training commands to pin training to the GPU 0 physical device. On Linux/WSL2 with NVIDIA Container Toolkit this is enforced at the kernel level. On Windows Docker Desktop, `NVIDIA_VISIBLE_DEVICES` is not enforced — see the GPU isolation note in Part 6 for details.
 
 The factory wrapper adds what autoresearch doesn't provide:
 - Packaging the trained checkpoint for Ollama consumption
@@ -572,8 +572,10 @@ Source code changes always require a pull request. The evolution engine creates 
 ### Parallel Experiments
 
 With two RTX 3090s you can run parallel sandbox experiments:
-- GPU 0: production Ollama + training factory
-- GPU 1: sandbox experiment Ollama instances
+- GPU 1: production `ollama-gpu1` (Alex, 35b permanent) + sandbox experiment Ollama instances
+- GPU 0: production `ollama-gpu0` (sub-agents) + training factory
+
+Note: on Windows Docker Desktop, GPU assignment between containers is not hardware-enforced — see the GPU isolation note in Part 6. On Linux/WSL2 with NVIDIA Container Toolkit, sandbox Ollama instances can be pinned to specific GPUs via `NVIDIA_VISIBLE_DEVICES`.
 
 Multiple hypotheses compete simultaneously. The best one gets promoted. The others get destroyed. This is genuine parallel evolution — multiple architectural mutations competing, with only the fittest surviving.
 
@@ -585,13 +587,13 @@ These settings exist to prevent resource exhaustion that would crash the entire 
 
 ### OLLAMA_MAX_LOADED_MODELS
 
-`OLLAMA_MAX_LOADED_MODELS: "1"` is set on the Ollama Docker service in docker-compose.yml.
+`OLLAMA_MAX_LOADED_MODELS` is set differently on each Ollama instance:
 
-**Why it exists:** Without this setting, Ollama will load a new model into VRAM for every request that names a different model. With agents requesting qwen3.5:35b-a3b, qwen3.5:9b, nomic-embed-text, and trustcore-agent-v1 simultaneously, Ollama will attempt to fit all of them in VRAM at once. An RTX 3090 has 24 GB VRAM. qwen3.5:35b-a3b alone uses ~20 GB. Loading two large models simultaneously causes an OOM crash that kills the Ollama container and takes all inference offline until manually restarted.
+- **`ollama-gpu1`: `OLLAMA_MAX_LOADED_MODELS=1`** — only one model may be loaded at a time. Combined with `OLLAMA_KEEP_ALIVE=-1`, this permanently holds `qwen3.5:35b-a3b` (20 GB) in VRAM and refuses to load anything else. This is intentional: GPU 1 is Alex's exclusive home. Do not raise this value.
 
-**What it does:** Forces Ollama to evict the current model before loading the next. Requests that arrive while a model is loading queue automatically. There is a small latency cost on model switches (10-30 seconds) but the system never crashes due to VRAM exhaustion.
+- **`ollama-gpu0`: `OLLAMA_MAX_LOADED_MODELS=8`** — Ollama's internal concurrency cap is deliberately high because the resource manager enforces the real VRAM budget via `acquireSlot()` and the `GPU0_AVAILABLE_MB=22528` constant. Letting Ollama manage up to 8 runners allows faster context switching between small models (9b, 4b, 2b, nomic-embed-text).
 
-**Do not remove this setting.** If you need to run multiple models simultaneously, add a second Ollama instance on a separate GPU and route requests to the appropriate instance.
+**Why `OLLAMA_MAX_LOADED_MODELS=1` was originally added (the BSOD incident):** Early in development, two large models loaded simultaneously (qwen3.5:35b-a3b + qwen3.5:9b, ~26 GB combined) caused a GPU driver crash and BSOD. The fix was the single-model limit plus the LLM priority queue. The dual-Ollama architecture is the evolved solution — each instance is sized for its role so simultaneous loads across instances stay within the 24 GB budget per GPU.
 
 ### LLM Request Timeout
 
@@ -603,12 +605,24 @@ All LLM calls in `src/llm/client.ts` have a 120-second hard timeout enforced via
 
 ### The Two-GPU Strategy
 
-TrustCore runs on a system with two RTX 3090 GPUs:
+TrustCore runs on a system with two RTX 3090 GPUs, each served by its own dedicated Ollama instance:
 
-- **GPU 0** — dedicated to training (autoresearch factory) and agent inference when the factory is idle. Has no display connection and can run at full sustained power.
-- **GPU 1** — handles the display, system UI, and agent inference. Must not be fully saturated during training or display output degrades.
+- **GPU 1 — Alex's permanent home** (`trustcore-ollama-gpu1`, port 11434). The `qwen3.5:35b-a3b` model is always loaded here with `OLLAMA_KEEP_ALIVE=-1` so it is never evicted. `OLLAMA_MAX_LOADED_MODELS=1` enforces that no other model can displace it. Alex, the API server, the MCP server, and the resource manager all route to this instance. Sub-agent work is never sent here.
 
-The resource manager enforces this split by tracking VRAM usage per GPU and routing inference requests to whichever GPU has headroom.
+- **GPU 0 — Shared execution pool** (`trustcore-ollama-gpu0`, port 11435). Used by email-writer, research, and the training factory. `OLLAMA_KEEP_ALIVE=0` means models are evicted immediately after each request, keeping VRAM free for the next job. `OLLAMA_MAX_LOADED_MODELS=8` allows Ollama's internal scheduler to handle concurrency while the resource manager enforces the real VRAM budget.
+
+The resource manager tracks live VRAM usage on GPU 0 and gates dispatch through `getAvailableSlots()`, `canDispatchNow()`, and `acquireSlot()`. GPU 1 VRAM is treated as fully committed — the resource manager never schedules sub-agent work there regardless of available headroom.
+
+### Windows Docker Desktop — GPU Isolation Limitation
+
+**`NVIDIA_VISIBLE_DEVICES` and `device_ids` in the `deploy.resources` section are not enforced by Docker Desktop on Windows.** Both `ollama-gpu1` and `ollama-gpu0` containers see both physical GPUs and report a combined 48 GB VRAM pool. Ollama manages GPU placement dynamically, loading models onto whichever GPU has the most available VRAM at the time.
+
+In practice this means:
+- The logical separation is real — different agent groups talk to different Ollama instances, and `OLLAMA_MAX_LOADED_MODELS=1` on gpu1 prevents the 35b model from being displaced.
+- The hardware-level GPU pinning is not enforced — Ollama may place a sub-agent's 9b model on GPU 1's physical silicon if it has more free VRAM at the moment.
+- The combined 48 GB pool actually improves throughput on this hardware — Ollama can fit more models simultaneously than either GPU alone could.
+
+**If strict GPU pinning is required** (e.g., to guarantee GPU 1 is 100% dedicated to the 35b model with zero sharing), the system must run under WSL2 with NVIDIA Container Toolkit on Linux, where `NVIDIA_VISIBLE_DEVICES` is fully respected at the kernel level. On Windows Docker Desktop this is a known limitation with no workaround.
 
 ### The BSOD Incident
 
@@ -623,7 +637,7 @@ Two mitigations were applied:
 
 `src/resource-manager/index.ts` — runs as `trustcore-resource-manager` Docker service.
 
-**Polling:** Every 10 seconds, calls `nvidia-smi --query-gpu=index,name,memory.used,memory.free,memory.total,utilization.gpu,temperature.gpu --format=csv,noheader,nounits` and stores results in `gpu_metrics`.
+**Polling:** Every 5 seconds, calls `nvidia-smi --query-gpu=index,name,memory.used,memory.free,memory.total,utilization.gpu,temperature.gpu --format=csv,noheader,nounits` and stores results in `gpu_metrics`. The 5-second interval keeps `currentGpu0VramUsedMB` fresh enough for accurate `getAvailableSlots()` decisions.
 
 **Fallback:** If nvidia-smi is unavailable (CPU-only host, CI), logs a warning and returns mock data so the rest of the system continues to function.
 
