@@ -21,6 +21,7 @@
 import { SubAgent, type TaskRecord } from '../base/SubAgent.js';
 import { chat, type ChatMessage } from '../../llm/client.js';
 import { searchKnowledgeBase } from '../../mcp/tools.js';
+import { webSearch } from '../../tools/webSearch.js';
 import { config } from '../../config.js';
 
 // Email writer uses a smaller/faster model when configured separately.
@@ -59,9 +60,29 @@ export class EmailWriterAgent extends SubAgent {
       task.id
     ) as Awaited<ReturnType<typeof searchKnowledgeBase>>;
 
-    const context = kbResults.length > 0
-      ? kbResults.map((r) => r.content).join('\n\n---\n\n')
-      : null;
+    // If no KB hits, try web search for context
+    let context: string | null = null;
+    if (kbResults.length > 0) {
+      context = kbResults.map((r) => r.content).join('\n\n---\n\n');
+    } else {
+      const webResults = await this.instrument(
+        'web_search',
+        { query: task.title },
+        () => webSearch(task.title, 3),
+        task.id
+      ) as Awaited<ReturnType<typeof webSearch>>;
+
+      if (webResults.length > 0) {
+        context = webResults
+          .map((r) => `${r.title}: ${r.snippet}`)
+          .join('\n\n');
+        await this.remember(
+          'observation',
+          `Web search found ${webResults.length} results for email context`,
+          { task_id: task.id, web_hits: webResults.length }
+        );
+      }
+    }
 
     await this.remember(
       'observation',

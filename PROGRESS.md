@@ -4,6 +4,13 @@
 
 All phases complete as of 2026-03-22. Both test suites passing (28/28). TypeScript clean.
 
+### Session 4 — 2026-03-22 Stats View + KB Viewer + Email Web Search
+
+**Phase S1** — `GET /api/stats` endpoint: per-agent task counts (total/completed/failed/24h), task breakdown by status, memory event counts by type, system last-heartbeat + avg duration
+**Phase S2** — `StatsView.tsx` wired to Projects tab: health row (heartbeat age, success rate, avg duration), agent performance cards with success-rate bars, task distribution bar chart, memory activity table; 10s SWR polling
+**Phase S3** — Email-writer web search: DuckDuckGo context injected before LLM draft step when KB has no hits; uses same `webSearch()` tool as research agent
+**Phase S4** — Docs tab: knowledge base viewer with source sidebar, chunk list, content preview, search filter; backed by `GET /api/knowledge?source=X&limit=N`
+
 ### Session 3 — 2026-03-22 Agent Activation + Web Search
 
 **Fix 1** — Ollama volume mount: `docker-compose.yml` changed `/mnt/c/Users/Admin/.ollama` → `C:/Users/Admin/.ollama`; models (qwen3.5:35b, qwen3.5:9b, nomic-embed-text) now visible inside container

@@ -135,8 +135,8 @@ export async function readUnifiedMemory(
       SELECT um.id, um.author_agent_id, um.session_id, um.event_type,
              um.summary, um.content, um.importance, um.created_at
       FROM unified_memory um
-      WHERE ${where} AND um.embedding IS NOT NULL
-      ORDER BY um.embedding <=> $${params.length}::vector
+      WHERE ${where}
+      ORDER BY um.embedding <=> $${params.length}::vector NULLS LAST
       LIMIT $${params.length - 1}
     `;
   } else {
@@ -213,11 +213,12 @@ export async function readOwnMemory(
   let params: unknown[];
 
   if (queryEmbedding) {
+    // Include null-embedding rows (written when embed was unavailable); sort them last
     sql = `
       SELECT id, agent_id, memory_type, summary, content, importance, created_at
       FROM agent_memory
-      WHERE agent_id = $1 AND is_archived = false AND embedding IS NOT NULL
-      ORDER BY embedding <=> $2::vector
+      WHERE agent_id = $1 AND is_archived = false
+      ORDER BY embedding <=> $2::vector NULLS LAST
       LIMIT $3
     `;
     params = [agentId, toVectorLiteral(queryEmbedding), limit];
@@ -389,8 +390,8 @@ export async function searchKnowledgeBase(
     sql = `
       SELECT id, agent_id, title, content, source, created_at
       FROM knowledge_base kb
-      WHERE ${agentFilter} AND kb.embedding IS NOT NULL
-      ORDER BY kb.embedding <=> $${params.length}::vector
+      WHERE ${agentFilter}
+      ORDER BY kb.embedding <=> $${params.length}::vector NULLS LAST
       LIMIT $1
     `;
   } else {

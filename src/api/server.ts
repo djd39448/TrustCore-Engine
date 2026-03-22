@@ -242,6 +242,17 @@ export async function startApiServer(): Promise<void> {
     res.json(result.rows);
   });
 
+  // --- Knowledge base sources list ---
+  app.get('/api/knowledge/sources', async (_req: Request, res: Response) => {
+    const result = await query(
+      `SELECT source, COUNT(*) as chunks, MIN(created_at) as ingested_at
+       FROM knowledge_base
+       GROUP BY source
+       ORDER BY source`
+    );
+    res.json(result.rows);
+  });
+
   // --- Knowledge base ---
   app.get('/api/knowledge', async (req: Request, res: Response) => {
     const { source, limit = '20' } = req.query as Record<string, string>;
@@ -253,8 +264,10 @@ export async function startApiServer(): Promise<void> {
       sourceFilter = `AND kb.source = $${params.length}`;
     }
 
+    // Return full content when a specific source is requested; preview otherwise
+    const contentExpr = source ? 'content' : 'left(content, 300) as content';
     const result = await query(
-      `SELECT id, title, source, chunk_index, left(content, 200) as preview, created_at
+      `SELECT id, title, source, chunk_index, ${contentExpr}, created_at
        FROM knowledge_base kb
        WHERE true ${sourceFilter}
        ORDER BY source, chunk_index

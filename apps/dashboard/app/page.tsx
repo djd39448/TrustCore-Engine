@@ -9,6 +9,7 @@ import MemoryView from '@/components/MemoryView';
 import AgentsView from '@/components/AgentsView';
 import OfficeView from '@/components/OfficeView';
 import StatsView from '@/components/StatsView';
+import DocsView from '@/components/DocsView';
 import { fetcher, WS_URL } from '@/lib/api';
 import type { WsMessage } from '@/lib/types';
 import styles from './page.module.css';
@@ -115,7 +116,7 @@ export default function Home() {
       case 'team': return <AgentsView />;
       case 'calendar': return <PlaceholderView name="Calendar" />;
       case 'projects': return <StatsView />;
-      case 'docs': return <PlaceholderView name="Docs" />;
+      case 'docs': return <DocsView />;
       case 'office': return <OfficeView />;
     }
   }
