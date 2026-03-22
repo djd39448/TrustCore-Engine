@@ -13,6 +13,7 @@
     "dev:email-writer": "node --loader ts-node/esm src/index.ts email-writer",
     "test:memory": "node --loader ts-node/esm scripts/test-memory.ts",
     "test:integration": "node --loader ts-node/esm scripts/integration-test.ts",
+    "test:eval": "node --loader ts-node/esm scripts/test-eval.ts",
     "test": "npm run test:memory && npm run test:integration",
     "migrate": "bash scripts/migrate.sh",
     "seed": "psql $DATABASE_URL -f db/seed.sql",

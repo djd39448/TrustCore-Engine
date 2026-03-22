@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import useSWR, { mutate } from 'swr';
 import { fetcher, createTask } from '@/lib/api';
-import type { Task, Agent } from '@/lib/types';
+import type { Task, Agent, EvalScore } from '@/lib/types';
 import styles from './TaskBoard.module.css';
 
 const COLUMNS: { key: Task['status']; label: string; color: string }[] = [
@@ -19,6 +19,42 @@ function StatusPill({ status }: { status: Task['status'] }) {
     <span className={styles.pill} style={{ background: col?.color ?? '#64748b' }}>
       {col?.label ?? status}
     </span>
+  );
+}
+
+function EvalPanel({ taskId }: { taskId: string }) {
+  const { data } = useSWR<EvalScore[]>(`/api/eval/scores?task_id=${taskId}&limit=1`, fetcher);
+  const score = data?.[0];
+  if (!score) return null;
+
+  const color = score.composite_score >= 3.5 ? '#22c55e' : score.composite_score >= 2.5 ? '#f59e0b' : '#ef4444';
+  const dims: [string, number][] = [
+    ['Technical', score.technical_correctness],
+    ['Complete', score.completeness],
+    ['Brand Voice', score.brand_voice],
+    ['Recipient', score.recipient_personalization],
+    ['Clarity', score.clarity],
+    ['Context', score.contextual_appropriateness],
+  ];
+
+  return (
+    <div className={styles.evalPanel}>
+      <div className={styles.evalHeader}>
+        <span className={styles.evalBadge} style={{ background: color }}>
+          {Number(score.composite_score).toFixed(2)} · {score.outcome.replace('_', ' ')}
+        </span>
+      </div>
+      <div className={styles.evalDims}>
+        {dims.map(([label, val]) => (
+          <span key={label} className={styles.evalDim}>
+            {label}: <b>{Number(val).toFixed(1)}</b>
+          </span>
+        ))}
+      </div>
+      {score.improvement_suggestions && score.improvement_suggestions !== 'None' && (
+        <p className={styles.evalSuggestions}>{score.improvement_suggestions}</p>
+      )}
+    </div>
   );
 }
 
@@ -57,6 +93,7 @@ function TaskCard({ task }: { task: Task }) {
               {JSON.stringify(task.result, null, 2)}
             </pre>
           )}
+          <EvalPanel taskId={task.id} />
         </div>
       )}
     </div>

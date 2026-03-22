@@ -42,6 +42,24 @@ export interface ToolCall {
   agent_slug: string;
 }
 
+export interface EvalScore {
+  id: string;
+  task_id: string;
+  composite_score: number;
+  outcome: 'approved' | 'needs_review' | 'needs_revision';
+  technical_correctness: number;
+  completeness: number;
+  brand_voice: number;
+  recipient_personalization: number;
+  clarity: number;
+  contextual_appropriateness: number;
+  dimension_notes: string | null;
+  improvement_suggestions: string | null;
+  revision_number: number;
+  eval_model: string | null;
+  created_at: string;
+}
+
 export interface WsMessage {
   event: 'connected' | 'task_update' | 'task_created' | 'memory_event';
   data: unknown;

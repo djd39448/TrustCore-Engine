@@ -382,3 +382,40 @@
   padding: 0.4rem 0.6rem;
   margin: 0;
 }
+
+/* Eval panel */
+.evalPanel {
+  margin-top: 0.5rem;
+  border-top: 1px solid #1e293b;
+  padding-top: 0.5rem;
+}
+
+.evalHeader {
+  margin-bottom: 0.3rem;
+}
+
+.evalBadge {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #fff;
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+}
+
+.evalDims {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+}
+
+.evalDim {
+  font-size: 0.68rem;
+  color: #94a3b8;
+}
+
+.evalSuggestions {
+  font-size: 0.68rem;
+  color: #f59e0b;
+  margin-top: 0.3rem;
+  margin-bottom: 0;
+}

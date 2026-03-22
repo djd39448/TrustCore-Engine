@@ -46,5 +46,16 @@ VALUES (
 )
 ON CONFLICT (slug) DO NOTHING;
 
+-- Insert the Eval Agent (callable evaluator, not a polling container)
+INSERT INTO agents (slug, display_name, type, description, is_active)
+VALUES (
+  'eval',
+  'Eval Agent',
+  'sub-agent',
+  'Multi-dimensional output quality evaluator: scores task results across 6 weighted dimensions, generates DPO training signal',
+  true
+)
+ON CONFLICT (slug) DO NOTHING;
+
 -- Verify insertion
 SELECT id, slug, display_name, type FROM agents ORDER BY created_at;

@@ -558,6 +558,77 @@ export async function startApiServer(): Promise<void> {
     res.json({ taskId, status: 'pending', result: null, timeout: true });
   });
 
+  // --- Eval scores (filter by task_id, agent, outcome, limit) ---
+  app.get('/api/eval/scores', async (req: Request, res: Response) => {
+    const { task_id, agent, outcome, limit = '50' } = req.query as Record<string, string>;
+    const limitN = Math.min(parseInt(limit, 10) || 50, 200);
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+
+    if (task_id) { params.push(task_id); conditions.push(`es.task_id = $${params.length}`); }
+    if (agent)   { params.push(agent);   conditions.push(`a.slug = $${params.length}`); }
+    if (outcome) { params.push(outcome); conditions.push(`es.outcome = $${params.length}`); }
+
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    params.push(limitN);
+
+    const result = await query<Record<string, unknown>>(
+      `SELECT es.*, a.slug AS agent_slug, a.display_name AS agent_display_name
+       FROM eval_scores es
+       JOIN agents a ON a.id = es.agent_id
+       ${where}
+       ORDER BY es.created_at DESC
+       LIMIT $${params.length}`,
+      params
+    );
+    res.json(result.rows);
+  });
+
+  // --- Eval summary (aggregate stats per agent/dimension/trend) ---
+  app.get('/api/eval/summary', async (_req: Request, res: Response) => {
+    const [perAgent, dimAvgs, recent] = await Promise.all([
+      query<Record<string, unknown>>(
+        `SELECT a.slug, a.display_name,
+                COUNT(*) AS total_evals,
+                AVG(composite_score) AS avg_composite,
+                COUNT(*) FILTER (WHERE outcome = 'approved')       AS approved,
+                COUNT(*) FILTER (WHERE outcome = 'needs_review')   AS needs_review,
+                COUNT(*) FILTER (WHERE outcome = 'needs_revision') AS needs_revision
+         FROM eval_scores es
+         JOIN agents a ON a.id = es.agent_id
+         GROUP BY a.id, a.slug, a.display_name
+         ORDER BY avg_composite DESC`
+      ),
+      query<Record<string, unknown>>(
+        `SELECT
+           AVG(technical_correctness)      AS avg_technical_correctness,
+           AVG(completeness)               AS avg_completeness,
+           AVG(brand_voice)                AS avg_brand_voice,
+           AVG(recipient_personalization)  AS avg_recipient_personalization,
+           AVG(clarity)                    AS avg_clarity,
+           AVG(contextual_appropriateness) AS avg_contextual_appropriateness,
+           AVG(composite_score)            AS avg_composite,
+           COUNT(*)                        AS total_evals
+         FROM eval_scores`
+      ),
+      query<Record<string, unknown>>(
+        `SELECT DATE_TRUNC('hour', created_at) AS hour,
+                AVG(composite_score) AS avg_composite,
+                COUNT(*) AS evals
+         FROM eval_scores
+         WHERE created_at > NOW() - INTERVAL '24 hours'
+         GROUP BY hour
+         ORDER BY hour ASC`
+      ),
+    ]);
+
+    res.json({
+      per_agent: perAgent.rows,
+      dimension_averages: dimAvgs.rows[0] ?? {},
+      trend_24h: recent.rows,
+    });
+  });
+
   // --- Health ---
   app.get('/health', (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
 
