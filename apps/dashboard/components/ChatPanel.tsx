@@ -105,7 +105,7 @@ export default function ChatPanel() {
     <div className={styles.panel}>
       <div className={styles.header}>
         <span className={styles.title}>Chat with Alex</span>
-        <span className={styles.subtitle}>Chief of Staff</span>
+        <span className={styles.subtitle}>Chief of Staff · messages become tasks · responses from the agent loop</span>
       </div>
 
       <div className={styles.messages}>
@@ -137,22 +137,24 @@ export default function ChatPanel() {
       </div>
 
       <div className={styles.inputRow}>
-        <textarea
-          className={styles.input}
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKey}
-          placeholder="Message Alex… (Enter to send)"
-          rows={2}
-          disabled={sending}
-        />
-        <button
-          className={styles.sendBtn}
-          onClick={() => void send()}
-          disabled={sending || !input.trim()}
-        >
-          {sending ? '…' : '↑'}
-        </button>
+        <div className={styles.inputInner}>
+          <textarea
+            className={styles.input}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKey}
+            placeholder="Message Alex… (Enter to send, Shift+Enter for new line)"
+            rows={2}
+            disabled={sending}
+          />
+          <button
+            className={styles.sendBtn}
+            onClick={() => void send()}
+            disabled={sending || !input.trim()}
+          >
+            {sending ? '…' : '↑'}
+          </button>
+        </div>
       </div>
     </div>
   );

@@ -1,47 +1,49 @@
 .panel {
-  width: 300px;
-  flex-shrink: 0;
+  flex: 1;
   display: flex;
   flex-direction: column;
-  background: #1e293b;
-  border-left: 1px solid #334155;
   overflow: hidden;
-}
-
-.header {
-  padding: 0.75rem 1rem;
-  border-bottom: 1px solid #334155;
-  display: flex;
-  align-items: baseline;
-  gap: 0.5rem;
   background: #0f172a;
 }
 
+.header {
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid #334155;
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  background: #1e293b;
+  flex-shrink: 0;
+}
+
 .title {
-  font-size: 0.75rem;
+  font-size: 0.9rem;
   font-weight: 700;
   color: #e2e8f0;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.03em;
 }
 
 .subtitle {
-  font-size: 0.63rem;
+  font-size: 0.72rem;
   color: #475569;
 }
 
 .messages {
   flex: 1;
   overflow-y: auto;
-  padding: 0.75rem;
+  padding: 1.5rem;
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
+  gap: 1rem;
 }
 
 .message {
   display: flex;
-  gap: 0.4rem;
-  align-items: flex-end;
+  gap: 0.6rem;
+  align-items: flex-start;
+  max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
 }
 
 .userMsg {
@@ -49,24 +51,25 @@
 }
 
 .avatar {
-  width: 22px;
-  height: 22px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
   background: #6366f1;
   color: #fff;
-  font-size: 0.6rem;
+  font-size: 0.7rem;
   font-weight: 700;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  margin-top: 2px;
 }
 
 .bubble {
-  max-width: 85%;
+  max-width: 75%;
   display: flex;
   flex-direction: column;
-  gap: 0.15rem;
+  gap: 0.2rem;
 }
 
 .userMsg .bubble {
@@ -74,13 +77,13 @@
 }
 
 .text {
-  font-size: 0.75rem;
-  line-height: 1.45;
+  font-size: 0.85rem;
+  line-height: 1.55;
   color: #e2e8f0;
-  background: #0f172a;
+  background: #1e293b;
   border: 1px solid #334155;
-  border-radius: 8px 8px 8px 2px;
-  padding: 0.4rem 0.6rem;
+  border-radius: 12px 12px 12px 4px;
+  padding: 0.6rem 0.9rem;
   white-space: pre-wrap;
   word-break: break-word;
   margin: 0;
@@ -91,28 +94,28 @@
   background: #6366f1;
   border-color: #6366f1;
   color: #fff;
-  border-radius: 8px 8px 2px 8px;
+  border-radius: 12px 12px 4px 12px;
 }
 
 .taskRef {
-  font-size: 0.58rem;
+  font-size: 0.63rem;
   color: #475569;
-  padding: 0 0.2rem;
+  padding: 0 0.25rem;
 }
 
 /* Thinking dots */
 .thinking {
-  display: flex;
-  gap: 4px;
-  padding: 0.5rem 0.7rem;
-  background: #0f172a;
+  display: inline-flex;
+  gap: 5px;
+  padding: 0.65rem 0.9rem;
+  background: #1e293b;
   border: 1px solid #334155;
-  border-radius: 8px 8px 8px 2px;
+  border-radius: 12px 12px 12px 4px;
 }
 
 .thinking span {
-  width: 6px;
-  height: 6px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   background: #6366f1;
   animation: bounce 1.2s infinite;
@@ -122,31 +125,42 @@
 .thinking span:nth-child(3) { animation-delay: 0.4s; }
 
 @keyframes bounce {
-  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
-  30% { transform: translateY(-5px); opacity: 1; }
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.35; }
+  30% { transform: translateY(-6px); opacity: 1; }
 }
 
-/* Input area */
+/* Input bar — full width, centered content */
 .inputRow {
   display: flex;
-  gap: 0.4rem;
-  padding: 0.6rem;
+  align-items: flex-end;
+  gap: 0.5rem;
+  padding: 1rem 1.5rem;
   border-top: 1px solid #334155;
-  background: #0f172a;
+  background: #1e293b;
+  flex-shrink: 0;
+}
+
+.inputInner {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-end;
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
 }
 
 .input {
   flex: 1;
-  background: #1e293b;
+  background: #0f172a;
   border: 1px solid #334155;
-  border-radius: 6px;
-  padding: 0.4rem 0.6rem;
+  border-radius: 8px;
+  padding: 0.55rem 0.85rem;
   color: #e2e8f0;
-  font-size: 0.75rem;
+  font-size: 0.85rem;
   font-family: inherit;
   resize: none;
   outline: none;
-  line-height: 1.4;
+  line-height: 1.45;
   transition: border-color 0.15s;
 }
 
@@ -154,16 +168,15 @@
 .input:disabled { opacity: 0.5; }
 
 .sendBtn {
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   background: #6366f1;
   border: none;
-  border-radius: 6px;
+  border-radius: 8px;
   color: #fff;
-  font-size: 1rem;
+  font-size: 1.1rem;
   cursor: pointer;
   flex-shrink: 0;
-  align-self: flex-end;
   transition: background 0.15s;
   display: flex;
   align-items: center;

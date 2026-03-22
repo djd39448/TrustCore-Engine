@@ -4,6 +4,13 @@
 
 All phases complete as of 2026-03-22. Both test suites passing (28/28). TypeScript clean.
 
+### Session 7 — 2026-03-22 Layout Restore + Chat Tab
+
+**Fix** — Restored original Tasks layout: left sidebar (Agents), center (TaskBoard full width), right (MemoryFeed); ChatPanel removed from Tasks page
+**Fix** — Chat moved to dedicated **Chat tab** between Tasks and Memories; full-page centered chat layout (max-width 720px conversation column) matching original design language
+**Fix** — ChatPanel CSS rewritten for full-page use: 12px border-radius bubbles, centered message column, full-width input bar with `inputInner` centering, thinking dots retained
+**Verified** — WebSocket on `ws://localhost:3003` connects and receives events; heartbeat green (Alex alive, 60s interval); `/api/agents` returns 5 agents with CORS `*`; "Reconnecting..." was stale UI state cleared on page refresh
+
 ### Session 6 — 2026-03-22 Chat Panel + Dashboard Dockerization
 
 **Phase D1** — Dashboard Dockerized: `Dockerfile.dashboard` (Next.js build + `npm start`); `dashboard` service added to `docker-compose.yml` on port 3004 (3000 reserved for local dev); stack now fully `docker compose up -d`
