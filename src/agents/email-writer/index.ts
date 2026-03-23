@@ -24,6 +24,20 @@ import { searchKnowledgeBase } from '../../mcp/tools.js';
 import { webSearch } from '../../tools/webSearch.js';
 import { config } from '../../config.js';
 
+/**
+ * ASBCP (Agent Schema Based Communication Protocol) — @asbcp/core
+ *
+ * When Alex dispatches a task using the ASBCP protocol, the description
+ * field is a serialised TaskMessage JSON string. We use validate() to
+ * detect this format, parse it, and extract the intent.payload as the
+ * schema — keeping the same validation guarantee at both ends of the wire.
+ *
+ * The email-writer continues to accept the legacy flat email-outreach schema
+ * format (plain JSON with type === 'email-outreach') for backwards compatibility.
+ * New dispatches from Alex will always use the ASBCP format.
+ */
+import { validate as validateASBCP, type TaskMessage } from '@asbcp/core';
+
 // Email writer uses a smaller/faster model when configured separately.
 // Falls back to the global LLM model.
 const EMAIL_MODEL = process.env['EMAIL_WRITER_MODEL'] ?? config.llmModel;
@@ -45,17 +59,81 @@ export class EmailWriterAgent extends SubAgent {
    */
   async handleTask(task: TaskRecord): Promise<unknown> {
     // -------------------------------------------------------------------------
-    // Schema parsing — description may be a JSON email-outreach schema from Alex
+    // Schema parsing — description may be either:
+    //   A) A validated ASBCP TaskMessage (from Alex ≥ ASBCP integration)
+    //      Detection: parsed JSON has asbcp_version === '1.0' and message_type === 'task'
+    //      Intent fields live in message.intent.payload; constraints in message.intent.constraints
+    //      Strategic notes from Alex (enrichment.notes) are logged but not injected into prompts —
+    //      they inform the agent but the LLM prompt is driven by the schema fields directly.
+    //
+    //   B) A legacy flat email-outreach schema (from Alex < ASBCP integration)
+    //      Detection: parsed JSON has type === 'email-outreach'
+    //      Handled exactly as before for backwards compatibility.
+    //
+    //   C) Plain-text description — used as-is (no structured schema)
     // -------------------------------------------------------------------------
     let schema: Record<string, unknown> | null = null;
     let effectiveDescription = task.description;
+    let enrichmentNotes: string | null = null;
 
     if (task.description) {
       try {
         const parsed = JSON.parse(task.description) as Record<string, unknown>;
-        if (parsed['type'] === 'email-outreach') {
+
+        // --- Path A: ASBCP TaskMessage ---
+        if (parsed['asbcp_version'] === '1.0' && parsed['message_type'] === 'task') {
+          // Validate through the SDK so we get typed access and a clear error if malformed.
+          const validationResult = validateASBCP(parsed);
+          if (validationResult.success && validationResult.data.message_type === 'task') {
+            // Explicit cast to TaskMessage: TypeScript can't chain narrowing through
+            // both the ValidationResult discriminant and the message_type discriminant
+            // in a single expression, so we assert here after confirming both.
+            const msg = validationResult.data as TaskMessage;
+            const payload = msg.intent.payload as Record<string, unknown>;
+
+            // Reconstruct the email-outreach schema shape from the ASBCP payload.
+            // intent.type is the task type; payload carries the domain-specific fields.
+            // intent.constraints carries the hard constraints array.
+            schema = {
+              type: msg.intent.type,        // e.g. 'email-outreach'
+              ...payload,                   // recipient, goal, tone, length, etc.
+              constraints: msg.intent.constraints ?? [],
+              eval: msg.intent.eval_type
+                ? { type: msg.intent.eval_type, priority: msg.intent.priority }
+                : undefined,
+            };
+
+            // Log Alex's strategic notes to memory — useful for debugging and DPO later.
+            // We do NOT inject them directly into LLM prompts to keep the intent layer sacred.
+            if (msg.enrichment?.notes) {
+              enrichmentNotes = msg.enrichment.notes;
+              await this.remember(
+                'observation',
+                `Email Writer received enrichment from Alex (msg ${msg.message_id})`,
+                {
+                  task_id: task.id,
+                  asbcp_message_id: msg.message_id,
+                  enrichment_notes: enrichmentNotes,
+                  context_sources: msg.enrichment.context_sources,
+                }
+              );
+            }
+          } else if (!validationResult.success) {
+            // ASBCP message was malformed — log and fall through to plain-text handling
+            await this.remember(
+              'observation',
+              `Email Writer: received malformed ASBCP message (validation failed), falling back to description`,
+              { task_id: task.id, errors: validationResult.error.flatten().fieldErrors }
+            );
+          }
+
+        // --- Path B: Legacy flat email-outreach schema ---
+        } else if (parsed['type'] === 'email-outreach') {
           schema = parsed;
         }
+
+        // Path C: JSON that is neither ASBCP nor email-outreach — treat as plain text (fall-through)
+
       } catch {
         // Plain-text description — use as-is
       }

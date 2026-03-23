@@ -29,6 +29,27 @@ import { classifyTaskIntent, prompt } from '../../llm/client.js';
 import { dispatch } from '../registry.js';
 import type { EvalResult } from '../eval/index.js';
 
+/**
+ * ASBCP (Agent Schema Based Communication Protocol) — @asbcp/core
+ *
+ * Every task Alex dispatches to a sub-agent is now a validated TaskMessage.
+ * The SDK enforces the two-layer schema contract at the type level:
+ *   - TaskMessage.intent  = sacred intent layer (set once, never modified)
+ *   - TaskMessage.enrichment = Alex's context block (additive only)
+ *   - TaskMessage.routing = origin → destination, with return_to for result routing
+ *
+ * The `validate()` call before dispatch catches any construction errors
+ * (missing required fields, wrong types) before the message reaches a sub-agent.
+ * If validation fails, the task fails loudly rather than silently producing
+ * a malformed message that the sub-agent would silently misparse.
+ */
+import {
+  type TaskMessage,
+  TaskMessageSchema,
+  validate as validateASBCP,
+  createEnvelope,
+} from '@asbcp/core';
+
 /** How often Alex wakes up to poll, check delegations, and consolidate memory. */
 const HEARTBEAT_INTERVAL_MS = 60_000; // 1 minute
 
@@ -257,9 +278,18 @@ async function orchestrateTask(task: {
 
     // Enrich: Alex reasons about context (KB + memory) and appends enrichment block.
     const enrichedSchema = await enrichTask(intentSchema, task.title, task.id);
-    const subTaskDescription = JSON.stringify(enrichedSchema);
 
-    // Log structured task_started — full schema + enrichment, not flat prose.
+    // Build a validated ASBCP TaskMessage from the enriched schema.
+    // This is the canonical dispatch envelope — intent + enrichment + routing,
+    // validated by the SDK before any bytes hit the task queue.
+    const asbcpMessage = buildTaskMessage(targetAgent, task.title, enrichedSchema);
+
+    // Serialise the validated message as the sub-task description.
+    // The sub-agent will JSON.parse this and detect the asbcp_version field.
+    const subTaskDescription = JSON.stringify(asbcpMessage);
+
+    // Log structured task_started — the full ASBCP message, not flat prose.
+    // Stored in unified_memory with the message_id for cross-system correlation.
     await writeUnifiedMemory(
       'alex',
       'task_started',
@@ -267,6 +297,7 @@ async function orchestrateTask(task: {
       {
         task_id: task.id,
         target_agent: targetAgent,
+        asbcp_message_id: asbcpMessage.message_id,
         schema: enrichedSchema,
       },
       3
@@ -280,13 +311,15 @@ async function orchestrateTask(task: {
       subTaskDescription
     );
 
-    // Record the delegation metadata in the parent task result so heartbeat
-    // can find and process it without re-reading intermediate state.
+    // Record delegation metadata in the parent task result.
+    // asbcp_message_id lets heartbeat and eval correlate this dispatch
+    // with logs, memory events, and any downstream ASBCP responses.
     // schema is stored here so checkCompletedDelegations can pass it to eval.
     await updateTask(task.id, 'in_progress', {
       delegated_to: targetAgent,
       sub_task_id: subTaskId,
       dispatched_at: new Date().toISOString(),
+      asbcp_message_id: asbcpMessage.message_id,
       schema: enrichedSchema,
     });
 
@@ -386,6 +419,120 @@ function buildGenericSchema(
     description: description ?? '',
     constraints: [] as string[],
   };
+}
+
+// ---------------------------------------------------------------------------
+// Build a validated ASBCP TaskMessage from an enriched schema
+// ---------------------------------------------------------------------------
+
+/**
+ * Assembles and validates an ASBCP TaskMessage from the enriched schema
+ * produced by enrichTask(). This is the canonical dispatch envelope — every
+ * sub-agent task passes through this function before hitting the task queue.
+ *
+ * Field mapping:
+ *
+ *   INTENT LAYER (sacred — from the enriched schema's intent fields)
+ *     intent.type        ← enrichedSchema.type  (e.g. 'email-outreach')
+ *     intent.payload     ← all task-type-specific fields (recipient, goal, etc.)
+ *     intent.priority    ← always 'high' for now; future: derived from task metadata
+ *     intent.constraints ← enrichedSchema.constraints array
+ *     intent.eval_type   ← enrichedSchema.eval?.type if present
+ *
+ *   ENRICHMENT LAYER (additive — from enrichTask()'s output)
+ *     enrichment.added_by        ← 'alex'
+ *     enrichment.timestamp       ← ISO timestamp from enrichTask()
+ *     enrichment.notes           ← Alex's strategic notes for the sub-agent
+ *     enrichment.context_sources ← KB UUIDs + memory + LLM provenance trail
+ *
+ *   ROUTING HEADER
+ *     routing.origin        ← 'alex' (always the dispatcher)
+ *     routing.destination   ← the target sub-agent slug
+ *     routing.dispatched_at ← current ISO timestamp
+ *     routing.return_to     ← 'alex' (results always route back here)
+ *
+ * The message is validated with validate() before this function returns.
+ * A ZodError here indicates a construction bug — callers should treat it as fatal.
+ *
+ * @param targetAgent - Slug of the destination sub-agent ('email-writer', 'research', etc.)
+ * @param taskTitle - Human-readable title from the parent task
+ * @param enrichedSchema - Output of enrichTask() — intent fields + enrichment block
+ * @returns A validated TaskMessage ready for serialisation into task.description
+ */
+function buildTaskMessage(
+  targetAgent: string,
+  taskTitle: string,
+  enrichedSchema: Record<string, unknown>
+): TaskMessage {
+  // --- Separate intent fields from the enrichment block ---
+  // The enrichment block was appended by enrichTask() at the top level.
+  // Extract it, then use the remaining fields as the intent payload.
+  const { enrichment: enrichmentBlock, ...intentFields } = enrichedSchema;
+
+  // --- Assemble intent.payload ---
+  // For email-outreach: the full schema minus the enrichment block IS the payload.
+  // For generic tasks: payload carries the title and free-text description.
+  // In both cases we omit the protocol-level fields (type, constraints, eval)
+  // that live as dedicated intent properties, keeping payload as task-specific data.
+  const { type, constraints, eval: evalBlock, ...payloadFields } = intentFields as Record<string, unknown>;
+
+  // --- Build the envelope + intent + enrichment + routing ---
+  const envelope = createEnvelope('task', crypto.randomUUID());
+
+  const raw: unknown = {
+    ...envelope,
+    intent: {
+      // task type — dot-notation, matches the sub-agent's `accepts` list
+      type: (type as string) ?? targetAgent,
+
+      // task-specific data: recipient, goal, tone, length, etc.
+      payload: {
+        title: taskTitle,
+        ...payloadFields,
+      },
+
+      // all dispatched tasks are high-priority for now
+      priority: 'high',
+
+      // hard constraints from the intent layer — sub-agent must not violate these
+      constraints: Array.isArray(constraints) ? constraints : [],
+
+      // eval type — tells the eval agent which rubric to apply
+      eval_type: (evalBlock as Record<string, unknown> | undefined)?.['type'] as string | undefined,
+    },
+
+    // enrichment block — Alex's strategic notes, KB sources, and provenance trail
+    enrichment: enrichmentBlock
+      ? {
+          added_by: (enrichmentBlock as Record<string, unknown>)['added_by'] as string,
+          timestamp: (enrichmentBlock as Record<string, unknown>)['timestamp'] as string,
+          notes: (enrichmentBlock as Record<string, unknown>)['notes'] as string,
+          context_sources: (enrichmentBlock as Record<string, unknown>)['context_sources'] as string[],
+        }
+      : undefined,
+
+    // routing header — origin → destination, results return to alex
+    routing: {
+      origin: 'alex',
+      destination: targetAgent,
+      dispatched_at: new Date().toISOString(),
+      return_to: 'alex',
+    },
+  };
+
+  // --- Validate the assembled message against the ASBCP TaskMessageSchema ---
+  // This catches construction errors (wrong types, missing fields) at dispatch time,
+  // not at execution time inside the sub-agent. Fail loudly here.
+  const result = validateASBCP(raw);
+  if (!result.success) {
+    const issues = result.error.flatten().fieldErrors;
+    throw new Error(
+      `ASBCP validation failed for task to '${targetAgent}': ${JSON.stringify(issues)}`
+    );
+  }
+
+  // TypeScript now knows result.data is a valid TaskMessage
+  return result.data as TaskMessage;
 }
 
 // ---------------------------------------------------------------------------

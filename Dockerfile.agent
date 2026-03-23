@@ -2,8 +2,9 @@ FROM node:20-slim
 
 WORKDIR /app
 
-# Copy package files and install production deps
+# Copy package files — includes vendor/ for local file: dependencies (@asbcp/core)
 COPY package.json package-lock.json* ./
+COPY vendor/ ./vendor/
 RUN npm ci --omit=dev
 
 # Copy TypeScript source + config
