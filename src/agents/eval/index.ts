@@ -142,7 +142,10 @@ export async function evaluate(input: EvalInput): Promise<EvalResult> {
 
   // --- Call LLM ---
   const rawResponse = await chat(
-    [{ role: 'user', content: userPrompt }],
+    [
+      { role: 'system', content: EVAL_SYSTEM },
+      { role: 'user', content: userPrompt },
+    ],
     EVAL_MODEL,
     EVAL_PRIORITY,
     `eval:${taskId}`
