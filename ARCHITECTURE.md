@@ -1180,3 +1180,322 @@ GPU 1 is connected to the display (Disp.A shows On in nvidia-smi output). Using 
 ---
 
 *This document was written in March 2026 at the beginning of the TrustCore project. If you are reading this from a future version of TrustCore that has implemented all eight phases, congratulations — you built something genuinely remarkable.*
+
+---
+
+## Part 13: External Intelligence Layer
+
+### 13.1 Overview
+
+Local agents handle orchestration, memory, and execution. When a task requires frontier model capabilities — nuanced reasoning, high-fidelity image generation, real-time web search, or professional voice synthesis — agents call external AI services through the External Intelligence Layer.
+
+This layer is not a fallback. It is a deliberate capability extension. Local Ollama models cover approximately 80% of all task volume. External services handle the remaining 20% where quality, specialization, or capability gaps make local inference insufficient. The result is frontier-grade output with zero local VRAM cost for those workloads.
+
+The External Intelligence Layer is:
+- **Transparent to the agent** — agents invoke tools, not providers directly
+- **Schema-driven** — skill definitions specify which model to use, not the agent at runtime
+- **Centrally credentialed** — all agents share a single credential store; no per-agent key management
+- **Output-buffered** — all external outputs land in a shared staging folder before consumption
+
+---
+
+### 13.2 Authentication Strategy
+
+TrustCore uses an OAuth-first authentication architecture for external AI services.
+
+**OAuth (preferred)**
+
+Google and Microsoft support OAuth natively across their AI product surfaces and are the preferred integration path:
+
+| Provider | Services |
+|---|---|
+| Google | Gemini, Vertex AI, Veo, Cloud Vision |
+| Microsoft | Azure AI Vision, Azure OpenAI |
+
+OAuth tokens are obtained once per service, stored encrypted in PostgreSQL, and refreshed automatically on expiry. No API key rotation. No secrets in environment files.
+
+**API Key Services**
+
+OpenAI and Anthropic currently use API keys. Both providers are expanding OAuth support; TrustCore will migrate to OAuth as those surfaces mature.
+
+| Provider | Auth Method | Migration Path |
+|---|---|---|
+| Anthropic | API key | OAuth when available |
+| OpenAI | API key | OAuth when available |
+| ElevenLabs | API key | API key (no OAuth roadmap) |
+| Deepgram | API key | API key |
+| Perplexity | API key | API key |
+| Adobe Firefly | OAuth | OAuth (current) |
+| Runway | API key | API key |
+
+**AWS**
+
+AWS services (Rekognition) use IAM roles with SigV4 request signing. Credentials are scoped to the minimum required permissions and managed via instance role where possible.
+
+**Credential Storage**
+
+All credentials — OAuth refresh tokens, API keys, AWS access pairs — are stored in the `external_credentials` table in PostgreSQL, encrypted at rest. All agents share the same stored credentials. There is no per-agent key management, no credential duplication, and no secrets outside the database.
+
+---
+
+### 13.3 The Staging Folder (Universal Output Buffer)
+
+All outputs from external model calls — images, video, audio, text, documents — are written to a shared host filesystem staging area before any agent consumes them.
+
+**Directory Structure**
+
+```
+/trustcore-data/staging/
+  {agent-id}/
+    {job-id}/
+      output.*          # primary output file (image, video, audio, etc.)
+      prompt.txt        # exact prompt or input sent to the model
+      metadata.json     # model, provider, parameters, timestamps, token counts
+```
+
+Each job gets an isolated subfolder. The agent that initiated the job writes the subfolder at creation time and sets an expiry timestamp.
+
+**Ownership Model**
+
+Files never move. Ownership transfers via the `staging_files` PostgreSQL table.
+
+When a job is created, the initiating agent inserts a row into `staging_files` with itself as `owner_agent_id` and sets `expires_at`. When the file is handed off to another agent — for example, the image-generator hands a rendered image to the email-writer — ownership transfers via a single SQL `UPDATE`:
+
+```sql
+UPDATE staging_files
+SET owner_agent_id = 'email-writer',
+    expires_at = NOW() + INTERVAL '2 hours'
+WHERE job_id = $1;
+```
+
+The timer resets on every ownership transfer. The new owner is responsible for consuming or re-handing the file before expiry.
+
+**Cleanup**
+
+Tim, the infrastructure agent, runs periodic cleanup sweeps over `staging_files`. Any row where `expires_at < NOW()` and `consumed = false` is flagged for deletion. Tim removes the filesystem subfolder and marks the row as expired. No orphaned files accumulate.
+
+**Mission Control**
+
+The Docs tab in Mission Control is a file explorer over `/trustcore-data/staging/`. Users can browse outputs by agent, inspect prompt and metadata files, and manually extend expiry or trigger cleanup.
+
+---
+
+### 13.4 Schema-Defined Intelligence
+
+External model selection is not made at runtime by agents. It is declared in the skill schema.
+
+Each skill definition includes an `intelligence` block that specifies the primary model, an optional local fallback, and a human-readable reason for the choice:
+
+```json
+{
+  "skill": "legal-summarization",
+  "intelligence": {
+    "primary": "anthropic/claude-opus",
+    "fallback": "local/qwen2.5:14b",
+    "reason": "requires nuanced legal reasoning"
+  }
+}
+```
+
+At execution time, the agent reads the skill schema, checks whether the primary model is reachable and within rate limits, and calls it. If the primary is unavailable, the agent falls back to the declared local model without surfacing the failure to the user.
+
+This approach keeps routing logic out of agent code and into configuration. Changing which model a skill uses is a schema edit, not a code change.
+
+Approximately **80% of tasks use local models** and have no `intelligence` block or specify a `local/*` primary. External intelligence is invoked only when the skill schema explicitly calls for it.
+
+---
+
+### 13.5 The Full Toolbox
+
+#### Reasoning
+
+| Model | Provider | Notes |
+|---|---|---|
+| Claude Opus / Sonnet | Anthropic | Default for complex reasoning, legal, analysis |
+| GPT-5.4 / GPT-5.4 mini | OpenAI | General reasoning; mini for cost-sensitive tasks |
+| Gemini (Pro / Flash) | Google | Multimodal reasoning; Flash for high-volume |
+
+#### Code
+
+| Model | Provider | Notes |
+|---|---|---|
+| GPT-5-Codex | OpenAI | Code generation and completion |
+| Claude Sonnet | Anthropic | Code review, refactoring, explanation |
+
+#### Image Generation
+
+| Model | Provider | Notes |
+|---|---|---|
+| GPT Image 1.5 | OpenAI | General image generation |
+| Gemini 2.5 Flash Image | Google | Fast, cost-efficient image generation |
+| Adobe Firefly | Adobe | Brand-safe, commercially licensed output |
+| Runway | Runway | Stylized image generation; shared with video |
+
+#### Video Generation
+
+| Model | Provider | Notes |
+|---|---|---|
+| Sora 2 | OpenAI | High-fidelity text-to-video |
+| Veo 3.1 | Google | Long-form video generation |
+| Runway Gen-4.5 | Runway | Stylized, fast video generation |
+
+#### Voice — Speech to Text
+
+| Model | Provider | Notes |
+|---|---|---|
+| GPT-4o Transcribe | OpenAI | High-accuracy transcription |
+| Deepgram Nova / Flux | Deepgram | Real-time and batch STT |
+
+#### Voice — Text to Speech
+
+| Model | Provider | Notes |
+|---|---|---|
+| ElevenLabs Flash / Turbo | ElevenLabs | Low-latency, high-quality voice synthesis |
+| GPT-4o mini TTS | OpenAI | Cost-efficient TTS for high-volume tasks |
+
+#### Web Search
+
+| Tool | Provider | Notes |
+|---|---|---|
+| Perplexity API | Perplexity | Research-grade search with citations |
+| Google Search Grounding | Google | Grounded Gemini responses via Search |
+| OpenAI Web Search | OpenAI | Web-augmented GPT responses |
+
+#### Vision / OCR
+
+| Tool | Provider | Notes |
+|---|---|---|
+| Cloud Vision API | Google | OCR, object detection, document parsing |
+| Rekognition | AWS | Image and video analysis |
+| Azure AI Vision | Microsoft | OCR, spatial analysis, custom models |
+
+#### Embeddings
+
+| Model | Provider | Notes |
+|---|---|---|
+| nomic-embed-text | Local (Ollama) | **Primary** — zero cost, runs locally |
+| text-embedding-3-large | OpenAI | High-dimensional embeddings for precision tasks |
+| Gemini Embedding 2 | Google | Multimodal embedding support |
+
+---
+
+### 13.6 File Structure
+
+External tool integrations live under `src/tools/external/`, organized by capability category:
+
+```
+src/tools/external/
+  reasoning/
+    anthropic.ts          # Claude API client and tool wrapper
+    openai.ts             # GPT client and tool wrapper
+    gemini.ts             # Gemini client and tool wrapper
+  image/
+    openai-image.ts       # GPT Image generation
+    gemini-image.ts       # Gemini image generation
+    firefly.ts            # Adobe Firefly integration
+    runway.ts             # Runway image generation
+  video/
+    sora.ts               # OpenAI Sora integration
+    veo.ts                # Google Veo integration
+    runway-video.ts       # Runway video generation
+  voice/
+    elevenlabs.ts         # ElevenLabs TTS
+    deepgram.ts           # Deepgram STT
+    openai-audio.ts       # GPT-4o Transcribe and TTS
+  search/
+    perplexity.ts         # Perplexity search API
+    google-grounding.ts   # Google Search Grounding
+    openai-search.ts      # OpenAI web search tool
+  vision/
+    google-vision.ts      # Google Cloud Vision API
+    rekognition.ts        # AWS Rekognition
+    azure-vision.ts       # Azure AI Vision
+```
+
+Each file exports a single tool wrapper that:
+1. Reads credentials from the `external_credentials` table
+2. Calls the external API
+3. Writes output to the staging folder
+4. Inserts a row into `staging_files`
+5. Returns the `job_id` to the calling agent
+
+Agents never interact with provider SDKs directly. All external calls go through these wrappers.
+
+---
+
+### 13.7 The `staging_files` Database Table
+
+The `staging_files` table is the ownership ledger for all external model outputs. It tracks what was produced, who owns it, whether it has been consumed, and when it expires.
+
+```sql
+CREATE TABLE staging_files (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  job_id          UUID NOT NULL UNIQUE,
+  owner_agent_id  VARCHAR(64) NOT NULL,
+  file_path       TEXT NOT NULL,
+  file_type       VARCHAR(32) NOT NULL,   -- 'image', 'video', 'audio', 'text', 'document'
+  prompt          TEXT,
+  model           VARCHAR(128) NOT NULL,  -- e.g. 'anthropic/claude-opus', 'openai/sora-2'
+  expires_at      TIMESTAMPTZ NOT NULL,
+  consumed        BOOLEAN NOT NULL DEFAULT false,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_staging_files_owner ON staging_files (owner_agent_id);
+CREATE INDEX idx_staging_files_expires ON staging_files (expires_at) WHERE consumed = false;
+```
+
+**Ownership Transfer Pattern**
+
+Ownership is transferred with a single atomic `UPDATE`. The receiving agent resets the expiry to its own processing window:
+
+```sql
+-- Agent B takes ownership from Agent A
+UPDATE staging_files
+SET
+  owner_agent_id = 'email-writer',
+  expires_at     = NOW() + INTERVAL '2 hours'
+WHERE
+  job_id = $1
+  AND consumed = false;
+```
+
+When an agent finishes consuming a file, it marks the row as consumed:
+
+```sql
+UPDATE staging_files
+SET consumed = true
+WHERE job_id = $1;
+```
+
+Consumed rows are retained for audit purposes. Tim's cleanup sweeps only delete filesystem contents and flag rows where `consumed = false AND expires_at < NOW()`.
+
+---
+
+### 13.8 Cost and Rate Limit Philosophy
+
+TrustCore's external AI spend is managed through two complementary mechanisms: OAuth subscriptions and API key monitoring.
+
+**OAuth Subscriptions — Fixed Cost, Natural Rate Limiting**
+
+Google and Microsoft services accessed via OAuth operate under subscription plans with fixed monthly costs. There are no per-token charges on these surfaces. Rate limits are enforced by the provider as a function of the subscription tier, which acts as a natural spend guardrail. No budget alerts, no surprise overages — the subscription is the ceiling.
+
+**API Key Services — Monitored via `agent_tool_calls`**
+
+OpenAI, Anthropic, ElevenLabs, Deepgram, and other API key services log every call to the `agent_tool_calls` table:
+
+```sql
+-- Relevant columns in agent_tool_calls
+tool_name       VARCHAR(128),   -- e.g. 'openai.image', 'anthropic.claude-opus'
+agent_id        VARCHAR(64),
+tokens_in       INTEGER,
+tokens_out      INTEGER,
+estimated_cost  NUMERIC(10, 6),
+called_at       TIMESTAMPTZ
+```
+
+Alex monitors this table and can surface cost summaries, flag unusual spend patterns, or pause a specific tool if a rate limit is approaching. Rate limits on API key services reset daily. There is no mechanism in TrustCore to accumulate unbounded spend between resets.
+
+**Design Principle**
+
+External intelligence is invoked explicitly, not speculatively. Because model selection is schema-driven and 80% of tasks run locally, external API calls are intentional events, not ambient background noise. This keeps cost predictable and the `agent_tool_calls` log meaningful.
