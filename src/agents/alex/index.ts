@@ -268,6 +268,18 @@ async function orchestrateTask(task: {
   // 3b. Delegate to sub-agent — dispatch and record, do NOT block waiting for result.
   //     checkCompletedDelegations() in the next heartbeat handles follow-through.
   try {
+    // Double-dispatch guard: if the target agent already has an in_progress sub-task,
+    // two tasks would compete for the same Ollama slot on gpu0, which causes model
+    // thrashing and degraded output quality. Instead, revert this parent task back
+    // to pending and let the next heartbeat retry when the agent is free.
+    const agentBusy = await guardAgentBusy(task.id, targetAgent);
+    if (agentBusy) {
+      // Revert parent to pending — will be picked up on next heartbeat poll.
+      await updateTask(task.id, 'pending');
+      console.log(`[Alex] ${targetAgent} is busy — deferred "${task.title}" to next heartbeat`);
+      return;
+    }
+
     // Build intent schema for all task types, then enrich before dispatch.
     let intentSchema: Record<string, unknown>;
     if (targetAgent === 'email-writer') {
@@ -336,6 +348,62 @@ async function orchestrateTask(task: {
       4
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// Double-dispatch guard — prevent competing tasks on the same Ollama slot
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns true if the named sub-agent already has an in_progress task,
+ * meaning its Ollama slot on gpu0 is still occupied.
+ *
+ * Why this matters:
+ *   email-writer and eval both run on ollama-gpu0 (qwen2.5:7b). GPU 0 has
+ *   OLLAMA_MAX_LOADED_MODELS=8 and OLLAMA_KEEP_ALIVE=0, but if two tasks
+ *   are dispatched before the first one's keep_alive=0 has taken effect,
+ *   both try to load the model simultaneously. This causes VRAM contention,
+ *   slower completions, and occasionally OOM errors.
+ *
+ *   The fix: Alex checks for an existing in_progress sub-task before creating
+ *   a new one. If one exists, Alex reverts the parent task to pending and
+ *   retries on the next heartbeat (60s later), by which time the first task
+ *   will have completed and the model will have been unloaded (keep_alive=0).
+ *
+ * @param parentTaskId - The parent task being processed (excluded from the check
+ *                       to avoid false positives if this parent somehow has an
+ *                       old in_progress child from a previous dispatch attempt)
+ * @param agentSlug    - The sub-agent slug to check ('email-writer', 'research', etc.)
+ * @returns true if the agent is busy and dispatch should be deferred
+ */
+async function guardAgentBusy(parentTaskId: string, agentSlug: string): Promise<boolean> {
+  const result = await query<{ id: string }>(
+    `SELECT t.id
+     FROM tasks t
+     JOIN agents a ON a.id = t.assigned_to_agent_id
+     WHERE a.slug = $1
+       AND t.status = 'in_progress'
+       AND t.parent_task_id IS DISTINCT FROM $2
+     LIMIT 1`,
+    [agentSlug, parentTaskId]
+  );
+
+  if (result.rows.length > 0) {
+    await writeUnifiedMemory(
+      'alex',
+      'observation',
+      `Alex deferred dispatch to ${agentSlug} — agent busy (task ${result.rows[0]!.id} in progress)`,
+      {
+        deferred_parent_id: parentTaskId,
+        blocking_task_id: result.rows[0]!.id,
+        agent: agentSlug,
+      },
+      2
+    );
+    return true;
+  }
+
+  return false;
 }
 
 // ---------------------------------------------------------------------------

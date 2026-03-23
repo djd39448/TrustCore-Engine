@@ -24,6 +24,27 @@ const LLM_MODEL = process.env['LLM_MODEL'] ?? 'qwen2.5-coder:32b';
 // 4096 is sufficient for task routing, classification, and short summarization.
 const OLLAMA_NUM_CTX = parseInt(process.env['OLLAMA_NUM_CTX'] ?? '4096');
 
+/**
+ * OLLAMA_KEEP_ALIVE — per-request model lifetime hint, passed in the request body.
+ *
+ * Ollama respects the keep_alive field in the request body, giving each agent
+ * explicit control over how long the model stays resident in VRAM after the
+ * response completes. This is separate from, and overrides, the server-level
+ * OLLAMA_KEEP_ALIVE environment variable on the Ollama container.
+ *
+ * Passing it per-request ensures the policy is enforced even if the Ollama
+ * container restarts with a different default.
+ *
+ * Values (Ollama format):
+ *   "0"   — unload model immediately after response (gpu0: email-writer, eval)
+ *   "-1"  — keep model loaded indefinitely (gpu1: alex)
+ *   "5m"  — keep for 5 minutes, then unload
+ *
+ * If the env var is not set (undefined), the field is omitted from the request
+ * body and Ollama falls back to its server-level default.
+ */
+const OLLAMA_KEEP_ALIVE = process.env['OLLAMA_KEEP_ALIVE'];
+
 // Approximate VRAM requirements by model name pattern (GB)
 const MODEL_SIZE_MAP: [RegExp, number][] = [
   [/70b/i, 40],
@@ -60,7 +81,17 @@ async function fetchChat(messages: ChatMessage[], model: string): Promise<string
     const response = await fetch(`${OLLAMA_HOST}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, messages, stream: false, options: { num_ctx: OLLAMA_NUM_CTX } }),
+      body: JSON.stringify({
+        model,
+        messages,
+        stream: false,
+        options: { num_ctx: OLLAMA_NUM_CTX },
+        // keep_alive instructs Ollama to unload (or keep) the model after this
+        // specific request, regardless of the server's default setting.
+        // "0" on gpu0 agents ensures the model is evicted immediately, freeing
+        // VRAM for the next task. "-1" on Alex's gpu1 keeps the 14b model hot.
+        ...(OLLAMA_KEEP_ALIVE !== undefined ? { keep_alive: OLLAMA_KEEP_ALIVE } : {}),
+      }),
       signal: controller.signal,
     });
 

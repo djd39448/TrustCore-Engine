@@ -136,7 +136,33 @@ export abstract class SubAgent {
         task_id: task.id,
         error: message,
       });
+    } finally {
+      // Always log the return-to-idle event so Alex's double-dispatch guard and
+      // the Mission Control memory feed both see when this agent's Ollama slot
+      // has been released. Importance=2 keeps it low-noise in the shared feed.
+      await this.logIdle(task.id);
     }
+  }
+
+  /**
+   * Writes a unified_memory observation marking this agent as idle.
+   *
+   * Called at the end of every task — success, failure, or stub — so that:
+   *   1. Alex's double-dispatch guard can confirm the Ollama slot is free.
+   *   2. The Mission Control memory feed shows the relay race completing cleanly.
+   *   3. VRAM consumers (email-writer, eval) are visible as released after each run.
+   *
+   * The message format `[{slug}] Task complete — returning to idle` is intentionally
+   * machine-readable so Alex's guard can query for it if needed in future.
+   */
+  private async logIdle(taskId: string): Promise<void> {
+    console.log(`[${this.displayName}] Task complete — returning to idle`);
+    await this.log(
+      'observation',
+      `[${this.slug}] Task complete — returning to idle`,
+      { task_id: taskId, status: 'idle' },
+      2
+    );
   }
 
   /**

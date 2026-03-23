@@ -73,6 +73,19 @@ app.post('/eval', async (req, res) => {
       console.error('[Eval Server] Failed to write agent_memory:', err instanceof Error ? err.message : String(err));
     });
 
+    // Signal that the eval agent is returning to idle — releases the gpu0 VRAM slot.
+    // Importance=2 keeps it low-noise; the message format is intentionally
+    // machine-readable so Alex's double-dispatch guard can query for it.
+    writeUnifiedMemory(
+      'eval',
+      'observation',
+      '[eval] Scoring complete — returning to idle',
+      { task_id: input.taskId, eval_id: result.evalId, status: 'idle' },
+      2
+    ).catch((err: unknown) => {
+      console.error('[Eval Server] Failed to write idle event:', err instanceof Error ? err.message : String(err));
+    });
+
     res.json(result);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
