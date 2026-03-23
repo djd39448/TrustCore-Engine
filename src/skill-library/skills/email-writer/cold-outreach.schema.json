@@ -1,0 +1,41 @@
+{
+  "type": "cold-outreach",
+  "version": "1.0.0",
+  "description": "Cold outreach email to a prospective contact. Personalized using recipient memory, brand voice, and user communication preferences.",
+  "agent": "email-writer",
+  "recipient": {
+    "name": "string — will be filled at runtime",
+    "role": "string — will be filled at runtime",
+    "company": "string — will be filled at runtime",
+    "memory_search": true
+  },
+  "subject": {
+    "theme": "string — will be filled at runtime",
+    "keywords": [],
+    "tone": "professional"
+  },
+  "body": {
+    "pain_points": [],
+    "use_soul": true,
+    "use_recipient_memory": true,
+    "use_user_preferences": true,
+    "call_to_action": "string — will be filled at runtime"
+  },
+  "constraints": {
+    "max_length": "300 words",
+    "format": "plain text"
+  },
+  "delivery": {
+    "method": "draft",
+    "requires_approval": true,
+    "approval_timeout": "24h",
+    "approval_channel": "chat",
+    "fallback": "queue_for_review"
+  },
+  "eval": {
+    "dimensions": ["personalization", "clarity", "brand_voice", "recipient_personalization"],
+    "threshold": 3.5,
+    "on_below_threshold": "revise_once_then_escalate",
+    "on_novel_type": "escalate_to_alex"
+  }
+}

@@ -66,6 +66,28 @@ services:
               device_ids: ['0']
               capabilities: [gpu]
 
+  eval:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    container_name: trustcore-eval
+    command: ["node", "--loader", "ts-node/esm", "src/agents/eval/server.ts"]
+    env_file: .env
+    environment:
+      <<: *db-url
+      OLLAMA_HOST: http://ollama-gpu0:11434
+      OLLAMA_HOST_GPU0: http://ollama-gpu0:11434
+      LLM_MODEL: "qwen2.5:7b"
+      EVAL_PORT: "3005"
+    ports:
+      - "3005:3005"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama-gpu0:
+        condition: service_started
+    restart: unless-stopped
+
   alex:
     build:
       context: .
@@ -81,10 +103,13 @@ services:
       OLLAMA_HOST_GPU0: http://ollama-gpu0:11434
       LLM_MODEL: "qwen2.5:14b"
       EVAL_POLL_TIMEOUT_MS: "1800000"
+      EVAL_SERVICE_URL: "http://trustcore-eval:3005"
     depends_on:
       postgres:
         condition: service_healthy
       ollama-gpu1:
+        condition: service_started
+      eval:
         condition: service_started
     restart: unless-stopped
 

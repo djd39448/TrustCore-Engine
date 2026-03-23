@@ -2,10 +2,18 @@ import { pool, query } from '../../db/client.js';
 import { writeUnifiedMemory, updateTask, resolveAgentId } from '../../mcp/tools.js';
 import { classifyTaskIntent, prompt } from '../../llm/client.js';
 import { dispatch } from '../registry.js';
+import type { EvalResult } from '../eval/index.js';
 
 const HEARTBEAT_INTERVAL_MS = 60_000; // 1 minute
 const CONSOLIDATION_AGE_DAYS = 7;
 const CONSOLIDATION_BATCH = 50;
+
+// EVAL_POLL_TIMEOUT_MS is the max wall-clock time Alex waits for a delegated
+// sub-task to reach terminal status before marking it failed.
+const DISPATCH_TIMEOUT_MS = parseInt(process.env['EVAL_POLL_TIMEOUT_MS'] ?? '1800000');
+
+// URL of the eval HTTP service (trustcore-eval container).
+const EVAL_SERVICE_URL = (process.env['EVAL_SERVICE_URL'] ?? 'http://localhost:3005').replace(/\/$/, '');
 
 // ---------------------------------------------------------------------------
 // Alex main loop
@@ -56,14 +64,13 @@ export async function runAlex(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Heartbeat: poll pending tasks + consolidate old memories
+// Heartbeat: pulse + poll pending + check completed delegations + consolidate
 // ---------------------------------------------------------------------------
 
 async function heartbeat(): Promise<void> {
   const ts = new Date().toISOString();
   console.log(`[Alex] Heartbeat at ${ts}`);
 
-  // Write heartbeat event so the dashboard indicator stays green
   try {
     await writeUnifiedMemory(
       'alex',
@@ -77,11 +84,12 @@ async function heartbeat(): Promise<void> {
   }
 
   await pollPendingTasks();
+  await checkCompletedDelegations();
   await consolidateOldMemories();
 }
 
 // ---------------------------------------------------------------------------
-// Poll pending tasks assigned to Alex
+// Poll pending tasks assigned to Alex — dispatch only, do not block
 // ---------------------------------------------------------------------------
 
 async function pollPendingTasks(): Promise<void> {
@@ -122,7 +130,7 @@ async function pollPendingTasks(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Orchestrate a task: classify intent → delegate to sub-agent or handle directly
+// Orchestrate a task: classify intent → handle directly or dispatch async
 // ---------------------------------------------------------------------------
 
 async function orchestrateTask(task: {
@@ -150,29 +158,30 @@ async function orchestrateTask(task: {
     console.log(`[Alex] LLM classified task as '${targetAgent}'`);
   }
 
+  // 3a. Alex handles directly — synchronous (fast, just one LLM call)
   if (targetAgent === 'alex') {
-    // Alex handles it directly — generate a summary via LLM if possible
     const reply = await prompt(
       `Complete this task concisely: "${task.title}"${task.description ? `\n\nDetails: ${task.description}` : ''}`,
       'You are Alex, an AI chief-of-staff. Be concise and actionable.'
     );
 
-    const result = reply
+    const taskResult = reply
       ? { answer: reply, source: 'llm' }
       : { answer: 'Task acknowledged. No LLM available for response.', source: 'heuristic' };
 
-    await updateTask(task.id, 'completed', result);
+    await updateTask(task.id, 'completed', taskResult);
     await writeUnifiedMemory(
       'alex',
       'task_completed',
       `Alex completed task: ${task.title}`,
-      { task_id: task.id, ...result },
+      { task_id: task.id, ...taskResult },
       3
     );
     return;
   }
 
-  // Delegate to a sub-agent via the registry
+  // 3b. Delegate to sub-agent — dispatch and record, do NOT block waiting for result.
+  //     checkCompletedDelegations() in the next heartbeat handles follow-through.
   try {
     const { subTaskId } = await dispatch(
       'alex',
@@ -182,80 +191,15 @@ async function orchestrateTask(task: {
       task.description ?? undefined
     );
 
-    // Poll for sub-task completion
-    const POLL_TIMEOUT_MS = parseInt(process.env['EVAL_POLL_TIMEOUT_MS'] ?? '120000');
-    const POLL_INTERVAL_MS = 5000;
-    const maxPolls = Math.floor(POLL_TIMEOUT_MS / POLL_INTERVAL_MS);
-    let subResult: unknown = null;
-    let subStatus = 'pending';
-
-    for (let i = 0; i < maxPolls; i++) {
-      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
-      const sub = await query<{ status: string; result: unknown }>(
-        `SELECT status, result FROM tasks WHERE id = $1`, [subTaskId]
-      );
-      subStatus = sub.rows[0]?.status ?? 'pending';
-      subResult = sub.rows[0]?.result;
-      if (subStatus === 'completed' || subStatus === 'failed') break;
-      console.log(`[Alex] Waiting for sub-task ${subTaskId} (${i + 1}/${maxPolls})...`);
-    }
-
-    // Sub-task timed out — mark both tasks failed, write alert, do not run eval
-    if (subStatus !== 'completed' && subStatus !== 'failed') {
-      console.log(`[Alex] Task timed out — marking as failed, not complete`);
-      await updateTask(subTaskId, 'failed', {
-        error: 'timeout',
-        message: 'Sub-task did not complete within poll window',
-      });
-      await updateTask(task.id, 'failed', {
-        error: 'timeout',
-        agent: targetAgent,
-        sub_task_id: subTaskId,
-      });
-      await writeUnifiedMemory(
-        'alex',
-        'system_alert',
-        `Task timeout: ${task.title} — sub-agent ${targetAgent} did not complete in time`,
-        { task_id: task.id, sub_task_id: subTaskId, agent: targetAgent, polls: maxPolls },
-        5
-      );
-      return;
-    }
-
-    // Run eval if sub-task completed successfully
-    if (subStatus === 'completed' && subResult) {
-      try {
-        const { evaluate } = await import('../eval/index.js');
-        const evalResult = await evaluate({
-          taskId: subTaskId,
-          taskTitle: task.title,
-          taskDescription: task.description,
-          producerAgentSlug: targetAgent,
-          result: subResult,
-        });
-        console.log(`[Alex] Eval complete: ${evalResult.composite_score.toFixed(2)} → ${evalResult.outcome}`);
-
-        if (evalResult.outcome === 'needs_review') {
-          console.log(`[Alex] Flagging task for human review`);
-        }
-      } catch (err) {
-        console.error(`[Alex] Eval failed (non-fatal):`, err);
-      }
-    }
-
-    await updateTask(task.id, 'completed', {
+    // Record the delegation metadata in the parent task result so heartbeat
+    // can find and process it without re-reading intermediate state.
+    await updateTask(task.id, 'in_progress', {
       delegated_to: targetAgent,
       sub_task_id: subTaskId,
-      sub_status: subStatus,
+      dispatched_at: new Date().toISOString(),
     });
 
-    await writeUnifiedMemory(
-      'alex',
-      'task_completed',
-      `Alex delegated task to ${targetAgent}: ${task.title}`,
-      { task_id: task.id, sub_task_id: subTaskId, sub_status: subStatus },
-      2
-    );
+    console.log(`[Alex] Dispatched "${task.title}" → ${targetAgent} (sub-task ${subTaskId}) — async, will check on heartbeat`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[Alex] Delegation failed: ${message}`);
@@ -271,11 +215,187 @@ async function orchestrateTask(task: {
 }
 
 // ---------------------------------------------------------------------------
+// Check completed delegations — called every heartbeat.
+// Finds in_progress parent tasks whose child sub-task has reached a terminal
+// state, runs eval on successful results, and marks the parent done.
+// Also enforces DISPATCH_TIMEOUT_MS for stuck sub-tasks.
+// ---------------------------------------------------------------------------
+
+async function checkCompletedDelegations(): Promise<void> {
+  // --- Find parents with a terminal child ---
+  const completed = await query<{
+    parent_id: string;
+    parent_title: string;
+    parent_description: string | null;
+    child_id: string;
+    child_status: string;
+    child_result: unknown;
+    producer_slug: string | null;
+  }>(`
+    SELECT
+      t.id          AS parent_id,
+      t.title       AS parent_title,
+      t.description AS parent_description,
+      c.id          AS child_id,
+      c.status      AS child_status,
+      c.result      AS child_result,
+      ag.slug       AS producer_slug
+    FROM tasks t
+    JOIN tasks c ON c.parent_task_id = t.id
+    LEFT JOIN agents ta ON ta.id = t.assigned_to_agent_id
+    LEFT JOIN agents ag ON ag.id = c.assigned_to_agent_id
+    WHERE t.status = 'in_progress'
+      AND (ta.slug = 'alex' OR t.assigned_to_agent_id IS NULL)
+      AND c.status IN ('completed', 'failed')
+    ORDER BY t.created_at ASC
+  `);
+
+  for (const row of completed.rows) {
+    console.log(`[Alex] Sub-task ${row.child_id} finished with status '${row.child_status}' — processing parent ${row.parent_id}`);
+
+    if (row.child_status === 'failed') {
+      // Sub-agent failed — propagate failure to parent
+      await updateTask(row.parent_id, 'failed', {
+        delegated_to: row.producer_slug,
+        sub_task_id: row.child_id,
+        sub_status: 'failed',
+      });
+      await writeUnifiedMemory(
+        'alex',
+        'task_failed',
+        `Delegated task failed: ${row.parent_title}`,
+        { task_id: row.parent_id, sub_task_id: row.child_id, agent: row.producer_slug },
+        4
+      );
+      continue;
+    }
+
+    // Sub-agent completed — run eval if result is present
+    if (row.child_result) {
+      try {
+        const evalResult = await callEvalService({
+          taskId: row.child_id,
+          taskTitle: row.parent_title,
+          taskDescription: row.parent_description ?? null,
+          producerAgentSlug: row.producer_slug ?? 'unknown',
+          result: row.child_result,
+        });
+
+        if (evalResult) {
+          console.log(`[Alex] Eval: ${evalResult.composite_score.toFixed(2)} → ${evalResult.outcome}`);
+          if (evalResult.outcome === 'needs_review') {
+            console.log(`[Alex] Flagging task ${row.parent_id} for human review`);
+            await writeUnifiedMemory(
+              'alex',
+              'observation',
+              `Task flagged for review: ${row.parent_title} (score ${evalResult.composite_score.toFixed(2)})`,
+              { task_id: row.parent_id, eval_id: evalResult.evalId, outcome: evalResult.outcome },
+              4
+            );
+          }
+        }
+      } catch (err) {
+        console.error(`[Alex] Eval failed (non-fatal):`, err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    await updateTask(row.parent_id, 'completed', {
+      delegated_to: row.producer_slug,
+      sub_task_id: row.child_id,
+      sub_status: row.child_status,
+    });
+
+    await writeUnifiedMemory(
+      'alex',
+      'task_completed',
+      `Alex delegated task completed: ${row.parent_title}`,
+      { task_id: row.parent_id, sub_task_id: row.child_id, agent: row.producer_slug },
+      2
+    );
+  }
+
+  // --- Timeout check: in_progress parents with stuck (pending/in_progress) child ---
+  const timeoutSeconds = Math.floor(DISPATCH_TIMEOUT_MS / 1000);
+  const timedOut = await query<{
+    parent_id: string;
+    parent_title: string;
+    child_id: string;
+  }>(`
+    SELECT
+      t.id    AS parent_id,
+      t.title AS parent_title,
+      c.id    AS child_id
+    FROM tasks t
+    JOIN tasks c ON c.parent_task_id = t.id
+    LEFT JOIN agents ta ON ta.id = t.assigned_to_agent_id
+    WHERE t.status = 'in_progress'
+      AND (ta.slug = 'alex' OR t.assigned_to_agent_id IS NULL)
+      AND c.status IN ('pending', 'in_progress')
+      AND t.updated_at < NOW() - make_interval(secs => $1)
+  `, [timeoutSeconds]);
+
+  for (const row of timedOut.rows) {
+    console.log(`[Alex] Task timeout: "${row.parent_title}" — sub-task ${row.child_id} did not complete in ${timeoutSeconds}s`);
+
+    await updateTask(row.child_id, 'failed', {
+      error: 'timeout',
+      message: 'Sub-task did not complete within dispatch timeout',
+    });
+    await updateTask(row.parent_id, 'failed', {
+      error: 'timeout',
+      sub_task_id: row.child_id,
+    });
+    await writeUnifiedMemory(
+      'alex',
+      'system_alert',
+      `Task timeout: ${row.parent_title} — sub-agent did not complete in time`,
+      { task_id: row.parent_id, sub_task_id: row.child_id, timeout_ms: DISPATCH_TIMEOUT_MS },
+      5
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Call the eval HTTP service
+// ---------------------------------------------------------------------------
+
+interface EvalHttpInput {
+  taskId: string;
+  taskTitle: string;
+  taskDescription: string | null;
+  producerAgentSlug: string;
+  result: unknown;
+  revisionNumber?: number;
+  previousEvalId?: string;
+}
+
+async function callEvalService(input: EvalHttpInput): Promise<EvalResult | null> {
+  try {
+    const res = await fetch(`${EVAL_SERVICE_URL}/eval`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+      signal: AbortSignal.timeout(300_000), // 5 min — eval can be slow on gpu0
+    });
+
+    if (!res.ok) {
+      console.error(`[Alex] Eval service returned ${res.status}: ${await res.text()}`);
+      return null;
+    }
+
+    return (await res.json()) as EvalResult;
+  } catch (err) {
+    if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+      console.error('[Alex] Eval service timed out');
+    } else {
+      console.error('[Alex] Eval service unavailable:', err instanceof Error ? err.message : String(err));
+    }
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Consolidate old memories
-// Consolidation flow:
-//   1. Write a consolidation_summary entry to unified_memory
-//   2. Create a memory_consolidations record pointing to that entry
-//   3. Mark source memories with consolidation_id
 // ---------------------------------------------------------------------------
 
 async function consolidateOldMemories(): Promise<void> {
@@ -298,14 +418,12 @@ async function consolidateOldMemories(): Promise<void> {
   const rows = result.rows as Array<{ id: string; summary: string }>;
   const bulletList = rows.map((r) => `- ${r.summary}`).join('\n');
 
-  // Try to get a LLM-generated digest; fall back to bullet list
   const llmDigest = await prompt(
     `Summarize these memory entries into 2-3 sentences:\n${bulletList}`,
     'You are an AI memory consolidation system. Be concise and factual.'
   );
   const summaryText = llmDigest ?? bulletList;
 
-  // Step 1: Write the consolidation summary as a unified_memory entry
   const summaryMemory = await writeUnifiedMemory(
     'alex',
     'consolidation_summary',
@@ -314,7 +432,6 @@ async function consolidateOldMemories(): Promise<void> {
     3
   );
 
-  // Step 2: Get time range of consolidated memories
   const rangeResult = await query<{ min_ts: Date; max_ts: Date }>(
     `SELECT MIN(created_at) as min_ts, MAX(created_at) as max_ts
      FROM unified_memory
@@ -325,7 +442,6 @@ async function consolidateOldMemories(): Promise<void> {
   const alexId = await resolveAgentId('alex');
   const range = rangeResult.rows[0];
 
-  // Step 3: Create memory_consolidations record
   const consResult = await query<{ id: string }>(
     `INSERT INTO memory_consolidations
        (summary_memory_id, time_range_start, time_range_end, memory_count, agent_scope)
@@ -337,7 +453,6 @@ async function consolidateOldMemories(): Promise<void> {
   const consolidationId = consResult.rows[0]!.id;
   const ids = rows.map((r) => r.id);
 
-  // Step 4: Mark source memories as consolidated
   await query(
     `UPDATE unified_memory
      SET is_consolidated = true, consolidation_id = $1

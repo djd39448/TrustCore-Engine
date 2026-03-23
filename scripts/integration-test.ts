@@ -67,6 +67,10 @@ function assert(cond: boolean, msg: string) {
  * Simulate Alex's orchestration of the welcome email task.
  * In production this runs inside alex/index.ts; here we replay the same
  * DB operations so we can assert on state without running the full loop.
+ *
+ * Async model: Alex dispatches and records delegation metadata, then returns.
+ * The parent task stays in_progress. checkCompletedDelegations() on the next
+ * heartbeat is what marks it completed (simulated below in simulateHeartbeatCheck).
  */
 async function simulateAlex(parentTaskId: string, taskTitle: string): Promise<string> {
   // Alex marks the task in_progress
@@ -78,21 +82,39 @@ async function simulateAlex(parentTaskId: string, taskTitle: string): Promise<st
     3
   );
 
-  // Alex dispatches to email-writer via registry
+  // Alex dispatches to email-writer via registry (async — does NOT block)
   const { subTaskId } = await dispatch('alex', parentTaskId, 'email-writer', taskTitle,
     'Write a warm, professional welcome email. Include a getting-started tip.'
   );
 
-  // Alex marks parent completed (delegated)
-  await updateTask(parentTaskId, 'completed', { delegated_to: 'email-writer', sub_task_id: subTaskId });
+  // Alex records delegation metadata in parent result and returns immediately.
+  // Parent stays in_progress — checkCompletedDelegations() handles follow-through.
+  await updateTask(parentTaskId, 'in_progress', {
+    delegated_to: 'email-writer',
+    sub_task_id: subTaskId,
+    dispatched_at: new Date().toISOString(),
+  });
+
+  return subTaskId;
+}
+
+/**
+ * Simulate Alex's checkCompletedDelegations heartbeat step.
+ * In production this runs each minute and finds parent tasks whose child
+ * has reached a terminal status, then marks the parent completed.
+ */
+async function simulateHeartbeatCheck(parentTaskId: string, subTaskId: string, taskTitle: string): Promise<void> {
+  await updateTask(parentTaskId, 'completed', {
+    delegated_to: 'email-writer',
+    sub_task_id: subTaskId,
+    sub_status: 'completed',
+  });
   await writeUnifiedMemory(
     'alex', 'task_completed',
-    `Alex delegated to email-writer: ${taskTitle}`,
+    `Alex delegated task completed: ${taskTitle}`,
     { task_id: parentTaskId, sub_task_id: subTaskId },
     2
   );
-
-  return subTaskId;
 }
 
 /**
@@ -217,8 +239,8 @@ async function main() {
     assert(typeof subTaskId === 'string', 'expected sub-task UUID');
   });
 
-  await test('parent task is completed after delegation', async () => {
-    await assertTaskStatus(parentTaskId!, 'completed', 'parent after delegation');
+  await test('parent task is in_progress after async dispatch', async () => {
+    await assertTaskStatus(parentTaskId!, 'in_progress', 'parent after async dispatch');
   });
 
   await test('child task created as pending for email-writer', async () => {
@@ -244,6 +266,14 @@ async function main() {
     );
     assert(row.rows[0]!.started_at !== null, 'started_at should be set');
     assert(row.rows[0]!.completed_at !== null, 'completed_at should be set');
+  });
+
+  // ── Step 3b: Simulate heartbeat checkCompletedDelegations ────────────────
+  // In production Alex's heartbeat detects the completed child and marks the
+  // parent completed. Here we replay that DB sequence directly.
+  await test('heartbeat check marks parent completed', async () => {
+    await simulateHeartbeatCheck(parentTaskId!, subTaskId!, TASK_TITLE);
+    await assertTaskStatus(parentTaskId!, 'completed', 'parent after heartbeat check');
   });
 
   // ── Step 4: Verify unified_memory chain ──────────────────────────────────
