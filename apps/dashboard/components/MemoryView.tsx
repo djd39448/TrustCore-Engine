@@ -92,6 +92,7 @@ export default function MemoryView() {
   const [typeFilter, setTypeFilter] = useState('');
   const [search, setSearch] = useState('');
   const [selectedAgent, setSelectedAgent] = useState('');
+  const [indivTypeFilter, setIndivTypeFilter] = useState('');
 
   // Agents for individual mode dropdown
   const { data: agents } = useSWR<Agent[]>('/api/agents', fetcher);
@@ -107,7 +108,7 @@ export default function MemoryView() {
 
   const sharedUrl = `${API_BASE}/api/memories?${sharedParams.toString()}`;
   const individualUrl = selectedAgent
-    ? `${API_BASE}/api/agents/${selectedAgent}/memories?limit=${PAGE_SIZE}`
+    ? `${API_BASE}/api/agents/${selectedAgent}/memories?limit=${PAGE_SIZE}${indivTypeFilter ? `&memory_type=${indivTypeFilter}` : ''}`
     : null;
 
   const swrKey = mode === 'shared' ? sharedUrl : individualUrl;
@@ -196,14 +197,28 @@ export default function MemoryView() {
           </>
         )}
 
-        {/* Individual: search only */}
+        {/* Individual: type filter + search */}
         {mode === 'individual' && selectedAgent && (
-          <input
-            className={styles.searchInput}
-            placeholder="Search summaries…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
+          <>
+            <select
+              className={styles.filter}
+              value={indivTypeFilter}
+              onChange={(e) => { setIndivTypeFilter(e.target.value); setPage(0); }}
+            >
+              <option value="">All types</option>
+              <option value="workflow_step">workflow_step</option>
+              <option value="tool_use">tool_use</option>
+              <option value="feedback">feedback</option>
+              <option value="observation">observation</option>
+              <option value="learned_preference">learned_preference</option>
+            </select>
+            <input
+              className={styles.searchInput}
+              placeholder="Search summaries…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </>
         )}
       </div>
 

@@ -393,15 +393,18 @@ export async function startApiServer(): Promise<void> {
   // --- Agent memories (individual agent_memory journal) ---
   app.get('/api/agents/:slug/memories', async (req: Request, res: Response) => {
     const { slug } = req.params;
-    const { limit = '20' } = req.query as Record<string, string>;
+    const { limit = '20', memory_type } = req.query as Record<string, string>;
+    const params: (string | number)[] = [slug, parseInt(limit, 10)];
+    const typeClause = memory_type ? ` AND am.memory_type = $3` : '';
+    if (memory_type) params.push(memory_type);
     const result = await query(
       `SELECT am.id, am.memory_type as event_type, am.summary, am.content, am.importance, am.created_at
        FROM agent_memory am
        JOIN agents a ON a.id = am.agent_id
-       WHERE a.slug = $1 AND am.is_archived = false
+       WHERE a.slug = $1 AND am.is_archived = false${typeClause}
        ORDER BY am.created_at DESC
        LIMIT $2`,
-      [slug, parseInt(limit, 10)]
+      params
     );
     res.json(result.rows);
   });

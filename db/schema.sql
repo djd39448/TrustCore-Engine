@@ -94,9 +94,9 @@ CREATE TABLE unified_memory (
   session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
   author_agent_id UUID NOT NULL REFERENCES agents(id) ON DELETE RESTRICT,
   event_type TEXT NOT NULL CHECK (event_type IN (
-    'task_started', 'task_completed', 'task_failed', 
-    'agent_called', 'user_interaction', 'observation', 
-    'consolidation_summary'
+    'task_started', 'task_completed', 'task_failed',
+    'agent_called', 'user_interaction', 'observation',
+    'consolidation_summary', 'heartbeat', 'system_alert'
   )),
   summary TEXT NOT NULL,
   content JSONB DEFAULT '{}',

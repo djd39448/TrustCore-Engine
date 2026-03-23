@@ -574,7 +574,7 @@ Source code changes always require a pull request. The evolution engine creates 
 ### Parallel Experiments
 
 With two RTX 3090s you can run parallel sandbox experiments:
-- GPU 1: production `ollama-gpu1` (Alex, 35b permanent) + sandbox experiment Ollama instances
+- GPU 1: production `ollama-gpu1` (Alex, qwen2.5:14b permanent) + sandbox experiment Ollama instances
 - GPU 0: production `ollama-gpu0` (sub-agents) + training factory
 
 Note: on Windows Docker Desktop, GPU assignment between containers is not hardware-enforced — see the GPU isolation note in Part 6. On Linux/WSL2 with NVIDIA Container Toolkit, sandbox Ollama instances can be pinned to specific GPUs via `NVIDIA_VISIBLE_DEVICES`.
@@ -591,11 +591,11 @@ These settings exist to prevent resource exhaustion that would crash the entire 
 
 `OLLAMA_MAX_LOADED_MODELS` is set differently on each Ollama instance:
 
-- **`ollama-gpu1`: `OLLAMA_MAX_LOADED_MODELS=1`** — only one model may be loaded at a time. Combined with `OLLAMA_KEEP_ALIVE=-1`, this permanently holds `qwen3.5:35b-a3b` (20 GB) in VRAM and refuses to load anything else. This is intentional: GPU 1 is Alex's exclusive home. Do not raise this value.
+- **`ollama-gpu1`: `OLLAMA_MAX_LOADED_MODELS=1`** — only one model may be loaded at a time. Combined with `OLLAMA_KEEP_ALIVE=-1`, this permanently holds `qwen2.5:14b` (10 GB at `OLLAMA_NUM_CTX=4096`) in VRAM and refuses to load anything else. This is intentional: GPU 1 is Alex's exclusive home. Do not raise this value.
 
 - **`ollama-gpu0`: `OLLAMA_MAX_LOADED_MODELS=8`** — Ollama's internal concurrency cap is deliberately high because the resource manager enforces the real VRAM budget via `acquireSlot()` and the `GPU0_AVAILABLE_MB=22528` constant. Letting Ollama manage up to 8 runners allows faster context switching between small models (9b, 4b, 2b, nomic-embed-text).
 
-**Why `OLLAMA_MAX_LOADED_MODELS=1` was originally added (the BSOD incident):** Early in development, two large models loaded simultaneously (qwen3.5:35b-a3b + qwen3.5:9b, ~26 GB combined) caused a GPU driver crash and BSOD. The fix was the single-model limit plus the LLM priority queue. The dual-Ollama architecture is the evolved solution — each instance is sized for its role so simultaneous loads across instances stay within the 24 GB budget per GPU.
+**Why `OLLAMA_MAX_LOADED_MODELS=1` was originally added (the BSOD incident):** Early in development, two large models loaded simultaneously (~26 GB combined) caused a GPU driver crash and BSOD. The fix was the single-model limit plus the LLM priority queue. The dual-Ollama architecture is the evolved solution — each instance is sized for its role so simultaneous loads across instances stay within the 24 GB budget per GPU.
 
 ### LLM Request Timeout
 
@@ -609,7 +609,7 @@ All LLM calls in `src/llm/client.ts` have a 120-second hard timeout enforced via
 
 TrustCore runs on a system with two RTX 3090 GPUs, each served by its own dedicated Ollama instance:
 
-- **GPU 1 — Alex's permanent home** (`trustcore-ollama-gpu1`, port 11434). The `qwen3.5:35b-a3b` model is always loaded here with `OLLAMA_KEEP_ALIVE=-1` so it is never evicted. `OLLAMA_MAX_LOADED_MODELS=1` enforces that no other model can displace it. Alex, the API server, the MCP server, and the resource manager all route to this instance. Sub-agent work is never sent here.
+- **GPU 1 — Alex's permanent home** (`trustcore-ollama-gpu1`, port 11434). The `qwen2.5:14b` model is always loaded here with `OLLAMA_KEEP_ALIVE=-1` and `OLLAMA_NUM_CTX=4096` so it fits in 10 GB and is never evicted. `OLLAMA_MAX_LOADED_MODELS=1` enforces that no other model can displace it. Alex, the API server, the MCP server, and the resource manager all route to this instance. Sub-agent work is never sent here.
 
 - **GPU 0 — Shared execution pool** (`trustcore-ollama-gpu0`, port 11435). Used by email-writer, research, and the training factory. `OLLAMA_KEEP_ALIVE=0` means models are evicted immediately after each request, keeping VRAM free for the next job. `OLLAMA_MAX_LOADED_MODELS=8` allows Ollama's internal scheduler to handle concurrency while the resource manager enforces the real VRAM budget.
 
@@ -620,15 +620,15 @@ The resource manager tracks live VRAM usage on GPU 0 and gates dispatch through 
 **`NVIDIA_VISIBLE_DEVICES` and `device_ids` in the `deploy.resources` section are not enforced by Docker Desktop on Windows.** Both `ollama-gpu1` and `ollama-gpu0` containers see both physical GPUs and report a combined 48 GB VRAM pool. Ollama manages GPU placement dynamically, loading models onto whichever GPU has the most available VRAM at the time.
 
 In practice this means:
-- The logical separation is real — different agent groups talk to different Ollama instances, and `OLLAMA_MAX_LOADED_MODELS=1` on gpu1 prevents the 35b model from being displaced.
+- The logical separation is real — different agent groups talk to different Ollama instances, and `OLLAMA_MAX_LOADED_MODELS=1` on gpu1 prevents qwen2.5:14b from being displaced.
 - The hardware-level GPU pinning is not enforced — Ollama may place a sub-agent's 9b model on GPU 1's physical silicon if it has more free VRAM at the moment.
 - The combined 48 GB pool actually improves throughput on this hardware — Ollama can fit more models simultaneously than either GPU alone could.
 
-**If strict GPU pinning is required** (e.g., to guarantee GPU 1 is 100% dedicated to the 35b model with zero sharing), the system must run under WSL2 with NVIDIA Container Toolkit on Linux, where `NVIDIA_VISIBLE_DEVICES` is fully respected at the kernel level. On Windows Docker Desktop this is a known limitation with no workaround.
+**If strict GPU pinning is required** (e.g., to guarantee GPU 1 is 100% dedicated to qwen2.5:14b with zero sharing), the system must run under WSL2 with NVIDIA Container Toolkit on Linux, where `NVIDIA_VISIBLE_DEVICES` is fully respected at the kernel level. On Windows Docker Desktop this is a known limitation with no workaround.
 
 ### The BSOD Incident
 
-Early in development, running multiple Ollama model loads simultaneously caused a system crash (BSOD). Root cause: two large models (qwen3.5:35b-a3b + qwen3.5:9b) attempted to load into VRAM simultaneously when agents processed tasks concurrently. Combined VRAM requirement exceeded 24 GB, causing the GPU driver to crash the system.
+Early in development, running multiple Ollama model loads simultaneously caused a system crash (BSOD). Root cause: two large models attempted to load into VRAM simultaneously when agents processed tasks concurrently. Combined VRAM requirement exceeded 24 GB, causing the GPU driver to crash the system.
 
 Two mitigations were applied:
 
