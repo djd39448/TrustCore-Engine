@@ -24,7 +24,7 @@
  */
 
 import { pool, query } from '../../db/client.js';
-import { writeUnifiedMemory, updateTask, resolveAgentId } from '../../mcp/tools.js';
+import { writeUnifiedMemory, updateTask, resolveAgentId, searchKnowledgeBase, readUnifiedMemory } from '../../mcp/tools.js';
 import { classifyTaskIntent, prompt } from '../../llm/client.js';
 import { dispatch } from '../registry.js';
 import type { EvalResult } from '../eval/index.js';
@@ -172,15 +172,6 @@ async function pollPendingTasks(): Promise<void> {
     console.log(`[Alex] Processing task: ${task.title} (${task.id})`);
 
     await updateTask(task.id, 'in_progress');
-
-    await writeUnifiedMemory(
-      'alex',
-      'task_started',
-      `Alex started task: ${task.title}`,
-      { task_id: task.id, description: task.description ?? 'none' },
-      3
-    );
-
     await orchestrateTask(task);
   }
 }
@@ -248,18 +239,38 @@ async function orchestrateTask(task: {
     return;
   }
 
+  // TRUSTCORE STANDARD: All tasks use two-layer schema.
+  // Intent layer = sacred, set by user/system, never modified.
+  // Enrichment layer = Alex only, appended before dispatch.
+  // This is SOP for all task types. Do not bypass.
+
   // 3b. Delegate to sub-agent — dispatch and record, do NOT block waiting for result.
   //     checkCompletedDelegations() in the next heartbeat handles follow-through.
   try {
-    // For email tasks: build a structured schema so the email-writer has full context
-    // and the eval agent can score against the email-outreach rubric.
-    let subTaskDescription = task.description ?? undefined;
-    let dispatchedSchema: Record<string, unknown> | undefined;
-
+    // Build intent schema for all task types, then enrich before dispatch.
+    let intentSchema: Record<string, unknown>;
     if (targetAgent === 'email-writer') {
-      dispatchedSchema = await buildEmailSchema(task.title, task.description);
-      subTaskDescription = JSON.stringify(dispatchedSchema);
+      intentSchema = await buildEmailSchema(task.title, task.description);
+    } else {
+      intentSchema = buildGenericSchema(targetAgent, task.title, task.description);
     }
+
+    // Enrich: Alex reasons about context (KB + memory) and appends enrichment block.
+    const enrichedSchema = await enrichTask(intentSchema, task.title, task.id);
+    const subTaskDescription = JSON.stringify(enrichedSchema);
+
+    // Log structured task_started — full schema + enrichment, not flat prose.
+    await writeUnifiedMemory(
+      'alex',
+      'task_started',
+      `Alex started task: ${task.title}`,
+      {
+        task_id: task.id,
+        target_agent: targetAgent,
+        schema: enrichedSchema,
+      },
+      3
+    );
 
     const { subTaskId } = await dispatch(
       'alex',
@@ -276,7 +287,7 @@ async function orchestrateTask(task: {
       delegated_to: targetAgent,
       sub_task_id: subTaskId,
       dispatched_at: new Date().toISOString(),
-      ...(dispatchedSchema ? { schema: dispatchedSchema } : {}),
+      schema: enrichedSchema,
     });
 
     console.log(`[Alex] Dispatched "${task.title}" → ${targetAgent} (sub-task ${subTaskId}) — async, will check on heartbeat`);
@@ -353,6 +364,109 @@ Return JSON with these exact keys:
     length: extracted['length'] ?? 'under 200 words',
     constraints: [] as string[],
     eval: { type: 'email-outreach', priority: 'high' },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Build a generic task schema for non-email task types
+// ---------------------------------------------------------------------------
+
+/**
+ * Builds a minimal intent schema for research, analysis, and other task types.
+ * Keeps the same shape as email-outreach so enrichTask() works uniformly.
+ */
+function buildGenericSchema(
+  taskType: string,
+  title: string,
+  description: string | null
+): Record<string, unknown> {
+  return {
+    type: taskType,
+    title,
+    description: description ?? '',
+    constraints: [] as string[],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Enrich a task schema with Alex's strategic context (two-layer schema SOP)
+// ---------------------------------------------------------------------------
+
+/**
+ * Enrichment step — Alex reads KB entries and recent memory observations,
+ * then uses the LLM to generate strategic notes before dispatch.
+ * Appends an immutable enrichment block to the intent schema:
+ *   { added_by: 'alex', timestamp, notes, context_sources }
+ *
+ * The intent layer is NEVER modified — enrichment is always additive.
+ */
+async function enrichTask(
+  intentSchema: Record<string, unknown>,
+  taskTitle: string,
+  taskId: string
+): Promise<Record<string, unknown>> {
+  const contextSources: string[] = [];
+  const contextParts: string[] = [];
+
+  // 1. Search KB for relevant entries
+  try {
+    const kbResults = await searchKnowledgeBase(taskTitle, 'alex', 3);
+    if (kbResults.length > 0) {
+      contextParts.push(
+        'KB context:\n' + kbResults.map((r) => `- ${r.content}`).join('\n')
+      );
+      contextSources.push(...kbResults.map((r) => `kb:${r.id}`));
+    }
+  } catch (err) {
+    console.error('[Alex] enrichTask KB search failed:', err instanceof Error ? err.message : String(err));
+  }
+
+  // 2. Read recent unified_memory observations for strategic context
+  try {
+    const recentMems = await readUnifiedMemory(taskTitle, { limit: 5, event_type: 'observation' });
+    if (recentMems.length > 0) {
+      contextParts.push(
+        'Recent observations:\n' + recentMems.map((m) => `- ${m.summary}`).join('\n')
+      );
+      contextSources.push('unified_memory:recent_observations');
+    }
+  } catch (err) {
+    console.error('[Alex] enrichTask memory read failed:', err instanceof Error ? err.message : String(err));
+  }
+
+  // 3. LLM generates strategic notes for the sub-agent
+  let notes = 'No additional context available.';
+  if (contextParts.length > 0) {
+    const contextBlock = contextParts.join('\n\n');
+    const schemaStr = JSON.stringify(intentSchema, null, 2);
+    const llmNotes = await prompt(
+      `You are Alex, a chief-of-staff AI. A sub-agent is about to work on this task:
+
+Task: "${taskTitle}"
+Schema: ${schemaStr}
+
+Available context:
+${contextBlock}
+
+In 2-3 sentences, write strategic notes for the sub-agent: what context is most relevant, any nuances to be aware of, and what success looks like. Be specific and actionable, not generic.`,
+      'You are Alex. Write concise strategic notes for a sub-agent. No preamble, just the notes.'
+    );
+    if (llmNotes) {
+      notes = llmNotes.trim();
+      contextSources.push('llm:alex-strategic-reasoning');
+    }
+  }
+
+  console.log(`[Alex] Enriched task ${taskId}: ${contextSources.length} context sources`);
+
+  return {
+    ...intentSchema,
+    enrichment: {
+      added_by: 'alex',
+      timestamp: new Date().toISOString(),
+      notes,
+      context_sources: contextSources,
+    },
   };
 }
 

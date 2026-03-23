@@ -37,5 +37,12 @@
     "threshold": 3.5,
     "on_below_threshold": "revise_once_then_escalate",
     "on_novel_type": "escalate_to_alex"
+  },
+  "enrichment": {
+    "_doc": "Appended by Alex only, before dispatch. Intent layer above is sacred and never modified.",
+    "added_by": "alex",
+    "timestamp": "ISO 8601 timestamp — set at dispatch time",
+    "notes": "Alex's strategic context for the sub-agent: relevant KB findings, relationship nuances, what success looks like",
+    "context_sources": ["kb:<uuid>", "unified_memory:recent_observations", "llm:alex-strategic-reasoning"]
   }
 }
