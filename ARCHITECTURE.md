@@ -780,11 +780,210 @@ Build in this order. Each phase depends on the previous ones being solid.
 - Onboarding guide for new contributors
 - Estimated: 1 week
 
-**Total estimated timeline from current state: 8-10 weeks of evening sessions**
+### Phase 9 — Skill Library & Schema Protocol
+- Define JSON schema format standard for all skill schemas
+- Convert email-writer to schema-based execution
+- Build classify-email-type workflow (known vs novel detection)
+- Build handle-novel workflow (Alex escalation + schema definition)
+- Build skill promotion pipeline (novel → standard)
+- Human review queue in Mission Control with Approve/Revise/Reject actions
+- SMTP delivery tool for actual email sending
+- Train specialist models on schema execution DPO pairs
+- Roll out schema protocol to research agent and all subsequent agents
+- Estimated: 3-4 weeks
+
+**Total estimated timeline from current state: 11-14 weeks of evening sessions**
 
 ---
 
-## Part 9: How to Use This Document
+## Part 9: Skill Library & Schema Protocol
+
+### The Problem with Freeform Agent Communication
+
+In the current implementation, Alex dispatches tasks to sub-agents by passing a natural language title and an optional free-text description. The email-writer receives instructions like "Write a cold outreach email to Marco Rossi at Acme Corp" and must infer from that string what tone to use, what pain points to address, how long the email should be, whether it needs approval before sending, and how its own output should be evaluated. This works, but it works badly.
+
+Freeform natural language task dispatch creates three compounding problems. First, ambiguity requires intelligence to resolve — the larger the model, the better it handles underspecified instructions. This creates an implicit dependency: you need a large model not because the underlying task is hard, but because the instructions are vague. Second, output consistency is impossible to guarantee. Two identical task titles produce different emails depending on how the model interprets the prompt on any given run. There is no contract between the caller and the callee. Third, evaluation becomes guesswork. When the eval agent scores an output, it must infer what "good" looks like from the task description alone, because there are no explicit success criteria defined at dispatch time.
+
+The schema protocol replaces this entire class of problems with structured contracts. When Alex dispatches a task under the schema protocol, it sends not a string but a typed document specifying exactly what should be produced, how, with what constraints, and how success will be measured. The sub-agent does not interpret — it executes. The eval agent does not infer success criteria — it reads them from the schema.
+
+### The Skill Library Architecture
+
+A sub-agent under the schema protocol is not a general-purpose LLM wrapper. It is a collection of well-defined schemas, skills, and tools structured into deterministic workflows. The LLM's role within this architecture is specific and bounded: it provides variable processing — injecting memories, personality, user context, and domain knowledge — within workflows that are themselves defined structurally, not by the model.
+
+This distinction matters. The LLM does not decide how to handle a cold outreach email. The `cold-outreach.schema.json` defines that. The LLM decides what to say in the body, given the recipient's memory profile, the user's communication preferences, and the agent's Soul.md voice guidelines. The workflow is fixed. The intelligence is applied within it.
+
+The file structure for a schema-driven agent reflects this separation cleanly:
+
+```
+src/agents/email-writer/
+  skills/
+    cold-outreach.schema.json
+    welcome-email.schema.json
+    daily-snapshot.schema.json
+    follow-up.schema.json
+  tools/
+    memory-search.ts
+    send-smtp.ts
+    kb-lookup.ts
+  workflows/
+    classify-email-type.ts
+    execute-schema.ts
+    handle-novel.ts
+```
+
+The `skills/` directory contains the contracts. Each schema defines a specific known email type: its required inputs, how each field should be populated, which memories to pull, what constraints apply, how delivery should work, and what the eval dimensions are. Adding a new known email type means adding a new schema file. No code changes required.
+
+The `tools/` directory contains the operations the agent can perform: searching memories, sending via SMTP, looking up entries in the knowledge base. These are deterministic, typed, and testable in isolation.
+
+The `workflows/` directory contains the orchestration logic. `classify-email-type.ts` decides whether an incoming task matches a known schema or is a novel type. `execute-schema.ts` runs a matched schema end to end. `handle-novel.ts` escalates to Alex and manages the schema definition process for types the agent has never seen before.
+
+### The 80/20 Principle
+
+Across any agent's operational life, approximately 80% of the tasks it receives are known types — requests that map cleanly to an existing schema. The agent recognizes them, loads the schema, and executes without deliberation. This path is fast, consistent, and immune to model variance. The quality of the output is determined primarily by the schema's design and the quality of the memories it draws on, not by how the model interprets an ambiguous prompt on that particular run.
+
+The remaining 20% are novel — tasks that do not match any existing schema. These are genuinely new types of requests. Under the freeform architecture, the agent guesses. Under the schema protocol, it escalates.
+
+When the email-writer encounters a novel type, it does not attempt to handle it alone. It surfaces the novelty to Alex: the task type is unrecognized, here is what was requested, schema definition assistance is needed before execution can proceed. Alex and the agent collaborate — Alex can involve the user if the task is high-stakes, or define the schema autonomously based on existing patterns if the intent is clear enough. The resulting schema is saved to the `skills/` directory. The next time a task of this type arrives, it is no longer novel. It is handled automatically.
+
+This is self-improvement at the workflow level, not just the model level. The system continuously promotes edge cases into standard practice. Over time the novel category shrinks. The known category grows. The proportion of tasks handled automatically without deliberation increases. The agents become more capable not because the model gets smarter, but because the skill library accumulates.
+
+### The Email Schema Protocol
+
+The following is the canonical schema structure for the email-writer agent. Each field is mandatory unless marked optional.
+
+```json
+{
+  "type": "cold_outreach",
+  "recipient": {
+    "name": "string",
+    "role": "string",
+    "company": "string",
+    "memory_search": true
+  },
+  "subject": {
+    "theme": "string",
+    "keywords": ["string"],
+    "tone": "string"
+  },
+  "body": {
+    "pain_points": ["string"],
+    "use_soul": true,
+    "use_recipient_memory": true,
+    "use_user_preferences": true,
+    "call_to_action": "string"
+  },
+  "constraints": {
+    "max_length": "300 words",
+    "format": "plain text"
+  },
+  "delivery": {
+    "method": "smtp | queue | draft",
+    "requires_approval": true,
+    "approval_timeout": "24h",
+    "approval_channel": "chat",
+    "fallback": "queue_for_review"
+  },
+  "eval": {
+    "dimensions": ["personalization", "clarity", "brand_voice"],
+    "threshold": 3.5,
+    "on_below_threshold": "revise_once_then_escalate",
+    "on_novel_type": "escalate_to_alex"
+  }
+}
+```
+
+Several fields deserve detailed explanation.
+
+`memory_search: true` instructs the agent to query unified_memory and agent_memory for everything stored about this recipient before generating any content. The email does not begin with generic opening lines — it begins with whatever the agent actually knows about the recipient, drawn from every previous interaction that has been committed to memory.
+
+`use_soul: true` injects the agent's Soul.md file — a persistent document defining its voice, tone, personality, and communication principles — into the generation prompt. Every email the agent produces sounds like it came from the same person, regardless of the topic, because it does.
+
+`use_user_preferences: true` applies the user's stored communication preferences — known style choices, things they always want emphasized, things they never want said — to the generation. The email reflects not just the agent's voice but the user's standards.
+
+The `delivery` block transforms the email-writer from a text-generation service into an end-to-end email pipeline. `requires_approval: true` means the draft surfaces in Mission Control's review queue rather than being sent immediately. `approval_timeout: 24h` tells the agent how long to wait before applying the `fallback` behavior. `approval_channel: "chat"` tells Alex which surface to use when surfacing the review request to the user.
+
+The `eval` block makes success criteria machine-readable at dispatch time. The eval agent knows exactly which dimensions to score, what threshold distinguishes acceptable from flagged, and what to do when the output falls short. `revise_once_then_escalate` is the policy for handling underperforming outputs — one automated revision attempt using the eval feedback as a correction signal, then human escalation if the revised output still fails to meet threshold.
+
+### Human Review Workflow
+
+The current system handles `needs_review` evaluations by logging an event to unified_memory and moving on. There is no surface in Mission Control that makes flagged items visible, no mechanism for the user to provide feedback, and no path from the user's decision back to the agent's execution. The review log is a dead end.
+
+The target state closes this loop completely. When the eval agent flags a task as `needs_review`, Alex surfaces it directly in the Chat tab — not as a notification, but as a natural language message that gives the user everything they need to act. "Hey Dave, the Marco Rossi email is ready but I flagged it for your review before we send. Composite score 3.2 — personalization was weak. Want to see it?" The user responds conversationally. Alex routes their decision: approve and send, request a specific revision, or reject entirely.
+
+This makes Alex's role explicit. He is not just a task dispatcher — he is the interface between the system's automated work and the human's judgement. Flagged items are not errors. They are the system's honest acknowledgement that certain outputs benefit from a human eye before they go out the door.
+
+The review workflow completes the feedback loop that feeds DPO training. Every user decision — approve, revise, reject — generates a labeled preference pair. The eval score explains why the output fell short. The user's decision defines what better looks like. These pairs are exactly the training signal the factory needs to improve the model's schema execution quality over time.
+
+### The Delivery Gap
+
+The email-writer in its current state produces text. That text is stored in `tasks.result` and is visible only to the database and to whatever process queries it directly. No email has ever been sent. No human has ever seen a draft surface in a review queue. The gap between "output stored" and "email delivered" is the entire value of the agent.
+
+Closing this gap requires three additions.
+
+The SMTP tool in `tools/send-smtp.ts` handles actual email delivery — it reads the draft from the task result, applies the delivery configuration from the schema, and sends via the configured SMTP server.
+
+The review queue in Mission Control surfaces flagged drafts as interactive task cards with Approve, Revise, and Reject actions that write directly back to the task record. Approve triggers the SMTP tool. Revise opens a feedback thread that the agent uses as a correction signal. Reject archives the draft and notifies Alex.
+
+Delivery confirmation is written to unified_memory when a send succeeds, creating a persistent record that the email was sent, when, and to whom. Recipient response tracking — detecting replies and routing them back as new tasks — is a future capability that the memory system is already designed to support.
+
+Until all three components exist, the email-writer is a sophisticated text generator. After they exist, it is an autonomous email agent.
+
+### Model Sizing Strategy
+
+Freeform agents need large models to compensate for ambiguity. When the instructions are vague, the model's general reasoning capability is the primary quality lever. Larger models handle underspecified instructions better because they can draw on broader contextual knowledge to fill in the gaps.
+
+Schema-driven agents invert this relationship. When the instructions are precise — when the schema specifies exactly what to produce, with what constraints, drawing on which memories, evaluated against which dimensions — the model's job is execution, not interpretation. Execution does not require a large model. It requires a model that is very good at the specific type of execution it will always be asked to do.
+
+This has significant implications for model sizing across the agent stack:
+
+| Agent role | Model target | Reasoning |
+|---|---|---|
+| Schema execution (email-writer v2) | 1b–3b custom trained | Narrow task, high repetition, schema provides all context |
+| Novel type detection | 9b | Requires broader reasoning to recognize genuinely new patterns |
+| Alex orchestration and routing | 14b | Coordination, priority judgements, user-facing communication |
+| Complex reasoning and architecture | 35b (future) | Reserved for genuinely hard multi-step reasoning tasks |
+
+A 3b model trained specifically on email schema execution will outperform a 9b general model on this task, because the training process optimizes exactly the behavior the schema protocol requires. The smaller model runs faster, uses less VRAM, and allows GPU 0 to handle more concurrent sub-agent requests. The schema protocol is not just an architectural improvement — it is the prerequisite for practical model specialization.
+
+### Connection to the DPO Training Pipeline
+
+Every successful schema execution is a (schema, output) pair. The schema defines what was asked. The output is what the agent produced. These pairs accumulate automatically in the database as the agent works.
+
+The eval agent scores each execution against the schema's own `eval` block — the dimensions and threshold that were defined when the schema was authored. High-scoring executions become positive training examples: this is what good schema execution looks like for this type. Low-scoring executions, especially those that went through a revision cycle before approval, become preference pairs: given this schema, the first output was worse than the revised output, and here is the scored difference.
+
+This is targeted self-improvement. The model does not improve at general instruction-following — it improves at executing the specific schemas it actually encounters in production, measured against the specific criteria that matter for those schemas. The training distribution matches the inference distribution exactly, which is the fundamental requirement for effective DPO training.
+
+The automation is complete end to end. The agent executes. The eval agent scores. The factory harvests pairs above the quality threshold. The DPO round runs when enough pairs accumulate. The new model weights replace the old ones. The agent wakes up measurably better at the tasks it actually does. No human intervention required at any step after the initial schema is authored.
+
+### Build Sequence for the Skill Library
+
+The skill library rolls out in seven sub-phases within Phase 9:
+
+**Phase 9a — Schema format standard.** Define the JSON schema specification that all skill schemas must conform to, including the standard field names, the type system for delivery methods and eval dimensions, and the validation logic that rejects malformed schemas at load time. This is the contract that everything else is built on.
+
+**Phase 9b — Convert email-writer to schema-based execution.** Migrate the existing email-writer from freeform prompt generation to schema-driven execution. The `execute-schema.ts` workflow handles all known types. Output quality should be equal to or better than the current implementation for all existing task types.
+
+**Phase 9c — Novel type detection.** Build the `classify-email-type.ts` workflow that routes incoming tasks either to `execute-schema.ts` (known) or `handle-novel.ts` (unknown). The detection logic should be conservative — when in doubt, treat as novel rather than forcing a poor schema match.
+
+**Phase 9d — Alex escalation for novel types.** Build the `handle-novel.ts` workflow including the Alex escalation protocol, the schema definition collaboration process, and the schema persistence pipeline that saves new schemas to the `skills/` directory.
+
+**Phase 9e — Skill promotion pipeline.** Build the tooling that monitors novel type frequency and automatically promotes high-frequency novel types to first-class schema status, flagging them for schema definition rather than waiting for a human to notice.
+
+**Phase 9f — Specialist model training.** Once the schema execution database is large enough to produce quality DPO pairs, train the first specialist model on email schema execution via the existing factory pipeline. Evaluate against the current general-purpose model. Promote if it outperforms.
+
+**Phase 9g — Protocol rollout.** Extend the schema protocol to the research agent and all subsequent specialist agents. Every new agent that joins the swarm is schema-driven from day one.
+
+### The Broader Vision
+
+The skill library and schema protocol are the architectural foundation for everything TrustCore becomes after the initial build. Every specialist agent that follows the email-writer — Tim the Toolman Taylor managing codebase maintenance schemas, the Eval Agent running structured evaluation schemas, future agents for calendar management, supplier communications, financial reporting — follows the same pattern. One protocol, one skill library structure, one training pipeline, one review workflow.
+
+This transforms TrustCore from a collection of general-purpose LLM agents into a structured business process automation platform. The distinction is fundamental. General-purpose LLM agents are powerful but unpredictable, expensive to run at scale, and difficult to improve systematically. Schema-driven agents are predictable by design, cheap to run on specialist hardware, and improve continuously through the DPO pipeline without human intervention.
+
+The LLMs do not go away — they remain the intelligence within the workflows. But they are no longer asked to define the workflows themselves. The workflows are defined by humans, refined by experience, and encoded in schemas that make the agent's behavior inspectable, reproducible, and improvable. This is the architectural foundation that makes long-term autonomous operation possible — not just months from now, but years from now, when the system has accumulated enough schema execution history to train models that are genuinely world-class at the specific tasks TrustCore actually does.
+
+---
+
+## Part 10: How to Use This Document
 
 ### For Claude Code sessions
 
