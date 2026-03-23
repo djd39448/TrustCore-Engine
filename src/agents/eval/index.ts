@@ -67,7 +67,17 @@ const WEIGHTS: Record<keyof DimensionScores, number> = {
   contextual_appropriateness: 0.10,
 };
 
+/**
+ * Model used for evaluation. Runs on GPU 0 (ollama-gpu0) via the eval container.
+ * Separate from Alex's qwen2.5:14b on GPU 1 — keeps eval load off Alex's GPU.
+ */
 const EVAL_MODEL = 'qwen2.5:7b';
+
+/**
+ * LLM queue priority for eval requests.
+ * Priority 2 = sub-agent execution level (same as regular sub-agents).
+ * Eval is not time-critical enough for priority 1 (alex routing).
+ */
 const EVAL_PRIORITY = 2;
 
 // ---------------------------------------------------------------------------
@@ -205,6 +215,20 @@ interface CalibrationContext {
   examples: CalibrationExample[];
 }
 
+/**
+ * Load previous eval results for tasks similar to this one.
+ * Extracts significant words from the title (>3 chars, up to 5) and queries
+ * eval_scores for tasks with matching titles using ILIKE.
+ *
+ * Returns up to 3 examples when ≥ 3 prior evals exist — the prompt uses these
+ * as scoring anchors to maintain consistency across evaluations of similar tasks.
+ * Returns isFirstOfType=true when no prior data exists, which triggers a note
+ * in the prompt telling the model to score without calibration anchors.
+ *
+ * Why calibration? Without it, the model's absolute scores drift across sessions.
+ * Anchoring to prior scores keeps the composite scale stable enough to be useful
+ * as a DPO training signal.
+ */
 async function fetchCalibrationContext(taskTitle: string): Promise<CalibrationContext> {
   try {
     // Extract significant words from the title to search for similar task types
@@ -294,6 +318,12 @@ function buildEvalPrompt(
   return parts.join('\n');
 }
 
+/**
+ * Pull stored observations about the task's recipient from unified_memory.
+ * Injected into the eval prompt to let the model score recipient_personalization
+ * against what is actually known about that person, not generic criteria.
+ * Returns empty string if no recipient observations found (graceful degradation).
+ */
 async function fetchRecipientContext(taskTitle: string): Promise<string> {
   try {
     const rows = await query<{ summary: string }>(
@@ -309,6 +339,12 @@ async function fetchRecipientContext(taskTitle: string): Promise<string> {
   }
 }
 
+/**
+ * Search the knowledge base for brand voice and style guidelines.
+ * Injected into the eval prompt so the model can score brand_voice against
+ * the actual documented style rather than guessing what "on-brand" means.
+ * Returns empty string if no brand voice KB entries exist.
+ */
 async function fetchBrandVoiceContext(taskTitle: string): Promise<string> {
   try {
     const kbResults = await searchKnowledgeBase('brand voice style guidelines tone', 'eval', 3);
@@ -376,6 +412,12 @@ function parseEvalResponse(raw: string | null): ParsedEval {
   }
 }
 
+/**
+ * Compute the weighted composite score from individual dimension scores.
+ * Weights are defined in WEIGHTS (completeness and brand_voice each 20%,
+ * technical_correctness and clarity each 15%, contextual_appropriateness 10%).
+ * Result is rounded to 2 decimal places.
+ */
 function computeComposite(scores: DimensionScores): number {
   let total = 0;
   for (const [dim, weight] of Object.entries(WEIGHTS) as [keyof DimensionScores, number][]) {
@@ -384,12 +426,32 @@ function computeComposite(scores: DimensionScores): number {
   return Math.round(total * 100) / 100;
 }
 
+/**
+ * Map a composite score to a human-readable outcome label.
+ *   ≥ 3.5  → approved     (good enough to deliver without human review)
+ *   ≥ 2.5  → needs_review  (borderline — surface to human for approval)
+ *   < 2.5  → needs_revision (clearly below bar — agent should revise)
+ *
+ * These thresholds can be overridden per-skill in the skill schema's eval.threshold.
+ * The outcome is stored in eval_scores and drives Alex's post-eval routing logic.
+ */
 function determineOutcome(composite: number): 'approved' | 'needs_review' | 'needs_revision' {
   if (composite >= 3.5) return 'approved';
   if (composite >= 2.5) return 'needs_review';
   return 'needs_revision';
 }
 
+/**
+ * Write the completed eval result to eval_scores in the DB.
+ * Records all 6 dimension scores, the composite, outcome, dimension notes,
+ * improvement suggestions, the model used, and the revision chain.
+ *
+ * The revision chain (revision_number + previous_eval_id) lets the DPO
+ * training pipeline compare initial output vs. revised output for the same task,
+ * which is the core signal for preference learning.
+ *
+ * Returns the new eval record's UUID so callers can reference it in memory writes.
+ */
 async function persistEval(params: {
   taskId: string;
   producerAgentSlug: string;

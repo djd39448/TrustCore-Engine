@@ -1,24 +1,68 @@
+/**
+ * Alex — chief-of-staff agent and top-level orchestrator.
+ *
+ * Alex is the always-on permanent agent that sits at the center of the
+ * TrustCore system. Every inbound task lands on Alex first. Alex classifies
+ * intent, decides whether to handle the task directly or delegate it to a
+ * specialist sub-agent, then monitors delegated work through to completion.
+ *
+ * Architecture role:
+ *   - Runs as the `trustcore-alex` Docker container (port 11434 → ollama-gpu1)
+ *   - Uses qwen2.5:14b at OLLAMA_NUM_CTX=4096 (10 GB, 100% GPU 1 VRAM)
+ *   - Communicates with sub-agents exclusively through the PostgreSQL task queue
+ *   - Communicates with the eval agent exclusively through its HTTP service
+ *
+ * Heartbeat loop (every 60 seconds):
+ *   1. pollPendingTasks()         — classify and dispatch new tasks
+ *   2. checkCompletedDelegations() — resolve finished sub-task work; eval + mark parent done
+ *   3. consolidateOldMemories()   — compress old low-importance unified_memory entries
+ *
+ * Async delegation model:
+ *   orchestrateTask() dispatches and returns immediately (parent stays in_progress).
+ *   checkCompletedDelegations() handles follow-through on the next heartbeat.
+ *   This keeps the heartbeat loop non-blocking regardless of how long sub-agents take.
+ */
+
 import { pool, query } from '../../db/client.js';
 import { writeUnifiedMemory, updateTask, resolveAgentId } from '../../mcp/tools.js';
 import { classifyTaskIntent, prompt } from '../../llm/client.js';
 import { dispatch } from '../registry.js';
 import type { EvalResult } from '../eval/index.js';
 
+/** How often Alex wakes up to poll, check delegations, and consolidate memory. */
 const HEARTBEAT_INTERVAL_MS = 60_000; // 1 minute
+
+/** Memories older than this many days with importance ≤ 2 are eligible for consolidation. */
 const CONSOLIDATION_AGE_DAYS = 7;
+
+/** Max number of memories compressed in a single consolidation pass. */
 const CONSOLIDATION_BATCH = 50;
 
-// EVAL_POLL_TIMEOUT_MS is the max wall-clock time Alex waits for a delegated
-// sub-task to reach terminal status before marking it failed.
+/**
+ * Max wall-clock time (ms) before Alex gives up on a delegated sub-task.
+ * When this elapses, the child task and parent task are both marked failed
+ * and a system_alert is written to unified_memory.
+ * Env var: EVAL_POLL_TIMEOUT_MS (default 30 minutes).
+ */
 const DISPATCH_TIMEOUT_MS = parseInt(process.env['EVAL_POLL_TIMEOUT_MS'] ?? '1800000');
 
-// URL of the eval HTTP service (trustcore-eval container).
+/**
+ * Base URL of the eval HTTP microservice (trustcore-eval container).
+ * Alex POSTs to /eval after each sub-task completes to score the result.
+ * Env var: EVAL_SERVICE_URL (default http://localhost:3005).
+ */
 const EVAL_SERVICE_URL = (process.env['EVAL_SERVICE_URL'] ?? 'http://localhost:3005').replace(/\/$/, '');
 
 // ---------------------------------------------------------------------------
 // Alex main loop
 // ---------------------------------------------------------------------------
 
+/**
+ * Entry point — starts the Alex agent.
+ * Writes a startup event to unified_memory, fires an immediate heartbeat,
+ * then schedules recurring heartbeats every HEARTBEAT_INTERVAL_MS.
+ * Registers a SIGINT handler for graceful shutdown.
+ */
 export async function runAlex(): Promise<void> {
   console.log('[Alex] Starting up...');
 
@@ -67,6 +111,12 @@ export async function runAlex(): Promise<void> {
 // Heartbeat: pulse + poll pending + check completed delegations + consolidate
 // ---------------------------------------------------------------------------
 
+/**
+ * Single heartbeat tick. Writes a heartbeat event to unified_memory
+ * (so Alex appears alive in the Team sidebar), then runs all three
+ * maintenance jobs in sequence. Errors in individual jobs are caught
+ * and logged without aborting the rest of the tick.
+ */
 async function heartbeat(): Promise<void> {
   const ts = new Date().toISOString();
   console.log(`[Alex] Heartbeat at ${ts}`);
@@ -92,6 +142,12 @@ async function heartbeat(): Promise<void> {
 // Poll pending tasks assigned to Alex — dispatch only, do not block
 // ---------------------------------------------------------------------------
 
+/**
+ * Find pending tasks assigned to Alex (or unassigned) and orchestrate each one.
+ * Processes up to 10 tasks per heartbeat to bound loop time.
+ * Each task is immediately marked in_progress so the next heartbeat doesn't
+ * double-dispatch it before orchestration completes.
+ */
 async function pollPendingTasks(): Promise<void> {
   const result = await query<{
     id: string;
@@ -133,6 +189,18 @@ async function pollPendingTasks(): Promise<void> {
 // Orchestrate a task: classify intent → handle directly or dispatch async
 // ---------------------------------------------------------------------------
 
+/**
+ * Classify a task's intent and either handle it directly or delegate
+ * asynchronously to a specialist sub-agent.
+ *
+ * Routing logic:
+ *   1. LLM classification (qwen2.5:14b) — returns 'email-writer', 'research', or 'alex'
+ *   2. Keyword fallback when Ollama is unavailable
+ *
+ * If targetAgent === 'alex': handled in-process with a single LLM prompt, task completed immediately.
+ * Otherwise: dispatch() creates a child task in the DB, parent stays in_progress.
+ * checkCompletedDelegations() picks up the result on the next heartbeat.
+ */
 async function orchestrateTask(task: {
   id: string;
   title: string;
@@ -369,6 +437,14 @@ interface EvalHttpInput {
   previousEvalId?: string;
 }
 
+/**
+ * POST the sub-task result to the eval HTTP service (trustcore-eval container).
+ * The eval service runs qwen2.5:7b on GPU 0 to score the result across
+ * 6 weighted dimensions and persists the score to eval_scores.
+ *
+ * Returns null on any failure (eval is non-fatal — the task still completes).
+ * 5-minute timeout allows for model load time on GPU 0.
+ */
 async function callEvalService(input: EvalHttpInput): Promise<EvalResult | null> {
   try {
     const res = await fetch(`${EVAL_SERVICE_URL}/eval`, {
@@ -398,6 +474,18 @@ async function callEvalService(input: EvalHttpInput): Promise<EvalResult | null>
 // Consolidate old memories
 // ---------------------------------------------------------------------------
 
+/**
+ * Compress old, low-importance unified_memory entries into a single summary.
+ *
+ * Selects up to CONSOLIDATION_BATCH memories older than CONSOLIDATION_AGE_DAYS
+ * with importance ≤ 2 that haven't been consolidated yet. Uses qwen2.5:14b
+ * to summarize them into 2-3 sentences, writes the summary as a new
+ * 'consolidation_summary' event, records the consolidation in memory_consolidations,
+ * and marks the originals as consolidated so they aren't processed again.
+ *
+ * This prevents unified_memory from growing unboundedly while preserving
+ * the substance of historical events in a searchable summary.
+ */
 async function consolidateOldMemories(): Promise<void> {
   const result = await query<{ id: string; summary: string }>(
     `SELECT id, summary

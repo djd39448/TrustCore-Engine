@@ -169,6 +169,12 @@ export abstract class SubAgent {
   // Helper shortcuts
   // ---------------------------------------------------------------------------
 
+  /**
+   * Write an event to unified_memory (the shared consciousness).
+   * Errors are swallowed — a failed memory write must never crash the agent
+   * loop or mark a task as failed. Tasks that succeed despite a memory write
+   * failure are still real successes.
+   */
   protected async log(
     eventType: UnifiedEventType,
     summary: string,
@@ -183,6 +189,12 @@ export abstract class SubAgent {
     }
   }
 
+  /**
+   * Write an entry to the agent's private journal (agent_memory).
+   * Use for workflow step tracking, observations, and learned preferences
+   * that don't need to be visible to other agents.
+   * Same error-swallowing contract as log().
+   */
   protected async remember(
     memoryType: AgentMemoryType,
     summary: string,
@@ -197,6 +209,15 @@ export abstract class SubAgent {
     }
   }
 
+  /**
+   * Wrap any tool call with automatic timing and logging to agent_tool_calls.
+   * On success: records input, output, and duration with status 'success'.
+   * On error: records the error message with status 'error', then re-throws
+   * so the calling task handler can decide how to handle the failure.
+   *
+   * This is the observability backbone — every external call an agent makes
+   * (LLM, KB search, web search, external API) should go through instrument().
+   */
   protected async instrument(
     toolName: string,
     input: unknown,
@@ -215,6 +236,11 @@ export abstract class SubAgent {
     }
   }
 
+  /**
+   * Resolve this agent's UUID from the DB.
+   * Rarely needed directly — most DB writes go through the tool functions
+   * which resolve the agent ID internally. Use this when you need the raw UUID.
+   */
   protected async getAgentId(): Promise<string> {
     return resolveAgentId(this.slug);
   }

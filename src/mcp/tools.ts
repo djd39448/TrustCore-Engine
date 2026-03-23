@@ -1,3 +1,24 @@
+/**
+ * MCP Tools Layer — the shared interface between agents and the database.
+ *
+ * Every agent interaction with persistent state goes through this module.
+ * Direct SQL queries from agent code are forbidden — everything must flow
+ * through these tool functions so that:
+ *   - Memory writes always attempt embedding (semantic search works)
+ *   - Tool calls are logged to agent_tool_calls for observability
+ *   - Agent IDs are resolved by slug so agents never hardcode UUIDs
+ *   - The MCP server can expose these same functions over stdio
+ *
+ * The two memory tables:
+ *   unified_memory  — shared consciousness, all agents can read/write
+ *   agent_memory    — private journal, only the owning agent writes to it
+ *
+ * Both tables attempt to store a vector embedding alongside each record.
+ * If the embedding model (nomic-embed-text) is unavailable, the record
+ * is written with a null embedding and semantic search degrades to
+ * recency+importance ranking. This graceful degradation is intentional.
+ */
+
 import { query } from '../db/client.js';
 import { embed, toVectorLiteral } from '../embedding/client.js';
 
@@ -78,6 +99,11 @@ export interface KnowledgeBaseRow {
 // Helper: resolve agent_id from slug
 // ---------------------------------------------------------------------------
 
+/**
+ * Resolve an agent's UUID from its human-readable slug.
+ * Throws if the agent doesn't exist or is inactive — callers should not
+ * proceed if the agent isn't in the DB (likely a missing seed.sql entry).
+ */
 export async function resolveAgentId(agentSlug: string): Promise<string> {
   const result = await query<{ id: string }>(
     'SELECT id FROM agents WHERE slug = $1 AND is_active = true',
@@ -93,6 +119,17 @@ export async function resolveAgentId(agentSlug: string): Promise<string> {
 // read_unified_memory
 // ---------------------------------------------------------------------------
 
+/**
+ * Read from unified_memory (the shared consciousness visible to all agents).
+ *
+ * Search strategy:
+ *   - If nomic-embed-text is available: vector cosine similarity search,
+ *     with null-embedding rows sorted last (they degrade to recency ranking).
+ *   - If embedding is unavailable: recency + importance ranking only.
+ *
+ * Filters narrow results before ranking. All filters are AND-combined.
+ * Limit defaults to 20 if not specified in filters.
+ */
 export async function readUnifiedMemory(
   searchQuery: string,
   filters: MemoryFilters = {}
@@ -159,6 +196,15 @@ export async function readUnifiedMemory(
 // write_unified_memory
 // ---------------------------------------------------------------------------
 
+/**
+ * Write an event to unified_memory (the shared consciousness).
+ * Always proceeds even if embedding fails — the record is written with
+ * a null embedding vector, and semantic search degrades gracefully.
+ *
+ * Importance scale: 1 (heartbeat/noise) → 5 (critical alert).
+ * Low-importance records (≤ 2) are eligible for memory consolidation
+ * after CONSOLIDATION_AGE_DAYS days.
+ */
 export async function writeUnifiedMemory(
   agentSlug: string,
   eventType: UnifiedEventType,
@@ -202,6 +248,12 @@ export async function writeUnifiedMemory(
 // read_own_memory
 // ---------------------------------------------------------------------------
 
+/**
+ * Read from an agent's private journal (agent_memory).
+ * Only returns records owned by agentSlug — other agents' private memories
+ * are not accessible through this function by design.
+ * Same vector/recency fallback strategy as readUnifiedMemory.
+ */
 export async function readOwnMemory(
   agentSlug: string,
   searchQuery: string,
@@ -243,6 +295,19 @@ export async function readOwnMemory(
 // write_own_memory
 // ---------------------------------------------------------------------------
 
+/**
+ * Write to an agent's private journal (agent_memory).
+ * Use this for workflow steps, tool observations, and learned preferences
+ * that are internal to the agent's reasoning process and not intended for
+ * the shared consciousness.
+ *
+ * Memory types:
+ *   workflow_step       — step-by-step progress through a task
+ *   tool_use            — record of a tool call and its result
+ *   feedback            — correction or preference noted from a user interaction
+ *   observation         — general observation about a task or environment
+ *   learned_preference  — durable preference to apply to future tasks
+ */
 export async function writeOwnMemory(
   agentSlug: string,
   memoryType: AgentMemoryType,
@@ -284,6 +349,15 @@ export async function writeOwnMemory(
 // log_tool_call
 // ---------------------------------------------------------------------------
 
+/**
+ * Log a tool invocation to agent_tool_calls.
+ * Called automatically by SubAgent.instrument() — agent code doesn't
+ * call this directly unless bypassing the instrument() wrapper.
+ *
+ * Records input, output, status (success/error/timeout), and wall-clock
+ * duration. These records are the raw data for the DPO training pipeline
+ * and for cost monitoring (tokens_in/tokens_out added in a later migration).
+ */
 export async function logToolCall(
   agentSlug: string,
   toolName: string,
@@ -317,6 +391,13 @@ export async function logToolCall(
 // create_task  (requires created_by_agent_id)
 // ---------------------------------------------------------------------------
 
+/**
+ * Create a new task in the tasks table.
+ * Tasks start as 'pending' — the assigned agent's poll loop will pick them up.
+ * parentTaskId links sub-tasks back to the parent for delegation tracking.
+ * assignedToSlug determines which agent's poll loop will claim the task;
+ * if omitted, only Alex (or unassigned) queries will find it.
+ */
 export async function createTask(
   createdBySlug: string,
   title: string,
@@ -345,6 +426,13 @@ export async function createTask(
 // update_task
 // ---------------------------------------------------------------------------
 
+/**
+ * Transition a task to a new status and optionally store its result payload.
+ * Automatically sets started_at on first transition to 'in_progress'
+ * and completed_at on any terminal status (completed, failed, cancelled).
+ * The result field holds whatever the handling agent returned — it is the
+ * primary output of the task and what eval scores against.
+ */
 export async function updateTask(
   taskId: string,
   status: TaskStatus,
@@ -366,6 +454,17 @@ export async function updateTask(
 // search_knowledge_base
 // ---------------------------------------------------------------------------
 
+/**
+ * RAG retrieval — search the knowledge base for relevant chunks.
+ *
+ * agentSlug controls visibility:
+ *   - If provided: returns global chunks (agent_id IS NULL) plus chunks
+ *     owned by this agent. Agents can have private KB entries.
+ *   - If omitted: returns only global chunks.
+ *
+ * Ranking: vector cosine similarity if embedding available, else recency.
+ * Used by email-writer and research in their Step 1 context-gathering phase.
+ */
 export async function searchKnowledgeBase(
   searchQuery: string,
   agentSlug?: string,

@@ -1,10 +1,12 @@
 /**
  * Resource Manager — GPU metrics collection and VRAM-aware LLM scheduling.
  *
- * GPU 1 — Alex's permanent home. 35b model always loaded, never evicted.
- *          Never used for sub-agent work.
+ * GPU 1 — Alex's permanent home. qwen2.5:14b always loaded (KEEP_ALIVE=-1),
+ *          never evicted. OLLAMA_NUM_CTX=4096 keeps it at 10 GB. Never used
+ *          for sub-agent work.
  * GPU 0 — Shared execution pool. Dynamic VRAM-aware scheduling.
- *          Sub-agents and factory load and run in parallel up to VRAM limit.
+ *          Sub-agents (qwen2.5:7b, qwen3.5:9b) and factory load/run in
+ *          parallel up to VRAM limit. KEEP_ALIVE=0 evicts after each request.
  *
  * This service:
  *   1. Polls nvidia-smi every 5 seconds for VRAM/util/temp on both GPUs
@@ -30,15 +32,30 @@ const HIGH_UTIL_THRESHOLD = 80; // percent
 // Model VRAM reference table (GB)
 // ---------------------------------------------------------------------------
 
+/**
+ * Approximate VRAM footprint in GB per model, at OLLAMA_NUM_CTX=4096.
+ * Used by getAvailableSlots() and acquireSlot() to gate dispatch decisions.
+ * Add new models here when onboarding them to the fleet.
+ *
+ * Note: actual VRAM depends on context length. These figures assume
+ * num_ctx=4096 (the system-wide default set in src/llm/client.ts).
+ * Larger contexts will use more VRAM and can exceed these estimates.
+ */
 const MODEL_VRAM_GB: Record<string, number> = {
-  'qwen3.5:35b-a3b': 20,       // GPU 1 only — never schedule on GPU 0
+  // GPU 1 only — Alex's permanent models, never schedule on GPU 0
+  'qwen2.5:14b': 10,           // Alex's primary model (KEEP_ALIVE=-1 on GPU 1)
+  'qwen3.5:35b-a3b': 20,       // legacy large model, GPU 1 only
+  'qwen2.5-coder:32b': 19,     // code model, GPU 1 only
+
+  // GPU 0 fleet — sub-agents and factory
+  'qwen2.5:7b': 5,             // eval agent primary model (trustcore-eval container)
   'qwen3.5:27b': 16,
   'qwen3.5:9b': 6,
   'qwen3.5:4b': 3,
   'qwen3.5:2b': 2,
-  'qwen2.5-coder:32b': 19,     // GPU 1 only — never schedule on GPU 0
   'qwen2.5:0.5b': 1,
-  'nomic-embed-text': 1,
+  'nomic-embed-text': 1,       // embedding model, always on GPU 0
+
   'default': 6,                // conservative fallback for unknown models
 };
 
@@ -46,7 +63,13 @@ const GPU0_TOTAL_VRAM_MB = 24576;
 const GPU0_HEADROOM_MB = 2048;                           // always reserve 2GB
 const GPU0_AVAILABLE_MB = GPU0_TOTAL_VRAM_MB - GPU0_HEADROOM_MB; // 22GB usable
 
-/** Models that live exclusively on GPU 1 — never dispatched to GPU 0 */
+/**
+ * Models that live exclusively on GPU 1 and must never be dispatched to GPU 0.
+ * Includes Alex's primary model and any large model that only fits on GPU 1.
+ * Note: qwen2.5:14b is NOT in this list because it's already on GPU 1 with
+ * KEEP_ALIVE=-1 — it won't be loaded onto GPU 0 in practice, but the
+ * resource manager doesn't need to enforce that separately.
+ */
 const GPU1_RESERVED_MODELS = ['qwen3.5:35b-a3b', 'qwen2.5-coder:32b'];
 
 // ---------------------------------------------------------------------------
