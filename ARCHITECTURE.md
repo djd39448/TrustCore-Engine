@@ -2,7 +2,7 @@
 
 **Version:** 1.0  
 **Status:** Active blueprint — all build phases reference this document  
-**Last updated:** March 2026  
+**Last updated:** March 2026 (updated with scaling architecture, agent lifecycle, Tim full role, Soul/User identity system)
 **Author:** Dave + Claude
 
 ---
@@ -72,14 +72,14 @@ Alex's responsibilities:
 - Break complex tasks into subtasks and dispatch them to specialized sub-agents
 - Monitor sub-agent progress and handle failures
 - Maintain the unified memory — writing events for everything that happens
-- Run the heartbeat loop every 30 minutes
+- Run the heartbeat loop every 60 seconds
 - Run the memory consolidation sweep periodically
 - Monitor system health and trigger self-healing when needed
 - Monitor training data thresholds and trigger retraining cycles
 
-Alex runs on a capable local LLM via Ollama. The default model is configurable but should be the largest model your hardware can run comfortably while leaving GPU headroom for sub-agents and training jobs.
+Alex runs on a capable local LLM via Ollama. Current model: **qwen2.5:14b** (9 GB, fits entirely in GPU 1 VRAM at 4096-token context). The 35b model was the original target but exceeds single-GPU VRAM when combined with KV cache — see Part 6 for the hardware constraint details.
 
-**Alex's heartbeat** is the nervous system of TrustCore. Every 30 minutes it:
+**Alex's heartbeat** is the nervous system of TrustCore. Every 60 seconds it:
 1. Writes a pulse to unified_memory
 2. Checks system health tables for any degraded or dead services
 3. Checks feedback thresholds to see if any agent needs retraining
@@ -95,6 +95,8 @@ The current sub-agent roster:
 - **email-writer** — drafts emails given a brief
 - **mailbox-agent** — handles actual email sending via SMTP
 - **research-agent** — web search and summarization (planned)
+- **eval** — multi-dimensional output quality scorer; runs as a standalone HTTP service on port 3005; invoked by Alex after every sub-task completion; scores across 6 weighted dimensions (technical_correctness, completeness, brand_voice, recipient_personalization, clarity, contextual_appropriateness); primary source of DPO training signal; uses qwen2.5:7b on GPU 0
+- **resource-manager** — GPU VRAM monitor and LLM request scheduler; polls nvidia-smi every 5 seconds; manages VRAM-aware dispatch for the GPU 0 shared execution pool; exposes `getAvailableSlots()`, `canDispatchNow()`, `acquireSlot()`, and `recommendHost()` to the LLM priority queue
 
 Each sub-agent has:
 - Its own fine-tuned LLM model (trained by the factory)
@@ -729,30 +731,30 @@ Build in this order. Each phase depends on the previous ones being solid.
 - Agent registry and dispatch
 - Integration tests passing
 
-### Phase 3 — Mission Control Connection (next)
+### Phase 3 — Mission Control Connection ✅ COMPLETE
 - Replace localStorage in Mission Control with live database queries
 - Wire the mission-control MCP server to the Next.js dashboard
 - Tasks kanban shows real tasks from the database
 - Activity feed shows real unified_memory events
 - Agent status shows real health data
-- Estimated: 1 week of evening sessions
 
-### Phase 4 — Training Factory
+### Phase 4 — Training Factory ✅ COMPLETE
 - autoresearch integration in WSL on GPU 0
 - Instruction tuning pipeline with LoRA
 - GGUF conversion and Ollama loading
 - Agent registration pipeline
 - Quality evaluation suite
-- Estimated: 1-2 weeks
+- trustcore-factory repo created and pushed
 
-### Phase 5 — Feedback and DPO Pipeline
-- feedback table migration
-- training_jobs and model_versions tables
-- Feedback harvester service
-- Autonomous retraining trigger logic
-- DPO training integration
-- Quality gate implementation
-- Estimated: 1-2 weeks
+### Phase 5 — Feedback and DPO Pipeline 🔄 IN PROGRESS
+- ✅ eval agent built — standalone HTTP service, 6-dimension scoring, DB persistence, unified_memory writes, heartbeat
+- ✅ eval_scores table migrated (013_create_eval_tables.sql)
+- ⏳ feedback table migration pending
+- ⏳ training_jobs and model_versions tables pending
+- ⏳ Feedback harvester service pending
+- ⏳ Autonomous retraining trigger logic pending
+- ⏳ DPO training integration pending
+- ⏳ Quality gate implementation pending
 
 ### Phase 6 — Self-Healing Layer
 - system_health and system_errors tables
@@ -780,19 +782,37 @@ Build in this order. Each phase depends on the previous ones being solid.
 - Onboarding guide for new contributors
 - Estimated: 1 week
 
-### Phase 9 — Skill Library & Schema Protocol
-- Define JSON schema format standard for all skill schemas
-- Convert email-writer to schema-based execution
-- Build classify-email-type workflow (known vs novel detection)
-- Build handle-novel workflow (Alex escalation + schema definition)
-- Build skill promotion pipeline (novel → standard)
-- Human review queue in Mission Control with Approve/Revise/Reject actions
-- SMTP delivery tool for actual email sending
-- Train specialist models on schema execution DPO pairs
-- Roll out schema protocol to research agent and all subsequent agents
+### Phase 9 — Skill Library & Schema Protocol 🔄 IN PROGRESS
+- ✅ 9a: JSON schema format standard defined (src/skill-library/schema.ts + cold-outreach.schema.json)
+- ⏳ 9b: Convert email-writer to schema-based execution
+- ⏳ 9c: Build classify-email-type workflow (known vs novel detection)
+- ⏳ 9d: Build handle-novel workflow (Alex escalation + schema definition)
+- ⏳ 9e: Build skill promotion pipeline (novel → standard)
+- ⏳ 9f: Human review queue in Mission Control with Approve/Revise/Reject actions
+- ⏳ 9g: SMTP delivery tool for actual email sending
+- ⏳ Train specialist models on schema execution DPO pairs
+- ⏳ Roll out schema protocol to research agent and all subsequent agents
+- Estimated: 3-4 weeks remaining
+
+### Phase 10 — Scaling Architecture & Agent Lifecycle
+- Model registry with version tracking, benchmark scores, and retirement logic
+- Tim the Toolman Taylor agent — infrastructure lifecycle manager
+- Agent spawning protocol with resource manager gating
+- Role-type memory partitioning (shared role memory vs individual task memory)
+- Container lifecycle management (create, deploy, health-check, deprecate)
+- Schema versioning and migration tooling
 - Estimated: 3-4 weeks
 
-**Total estimated timeline from current state: 11-14 weeks of evening sessions**
+### Phase 11 — Soul/User Identity System
+- Shared Soul.md — TrustCore collective identity and mission (authored by Dave + Claude)
+- Shared User.md — Universal Dave profile, maintained by Alex
+- Individual Soul.md per agent (voice, tone, expertise framing, personality)
+- Individual User.md per agent (direct principal + super-user hierarchy)
+- Identity document injection at startup (not RAG — full-load, always first)
+- Version history for identity evolution tracking
+- Estimated: 1-2 weeks (authoring is the long tail, not the implementation)
+
+**Total estimated timeline from current state: 13-16 weeks of evening sessions**
 
 ---
 
@@ -980,6 +1000,120 @@ The skill library and schema protocol are the architectural foundation for every
 This transforms TrustCore from a collection of general-purpose LLM agents into a structured business process automation platform. The distinction is fundamental. General-purpose LLM agents are powerful but unpredictable, expensive to run at scale, and difficult to improve systematically. Schema-driven agents are predictable by design, cheap to run on specialist hardware, and improve continuously through the DPO pipeline without human intervention.
 
 The LLMs do not go away — they remain the intelligence within the workflows. But they are no longer asked to define the workflows themselves. The workflows are defined by humans, refined by experience, and encoded in schemas that make the agent's behavior inspectable, reproducible, and improvable. This is the architectural foundation that makes long-term autonomous operation possible — not just months from now, but years from now, when the system has accumulated enough schema execution history to train models that are genuinely world-class at the specific tasks TrustCore actually does.
+
+---
+
+## Part 11: Scaling Architecture & Agent Lifecycle
+
+### The Scaling Problem
+
+The naive extension of TrustCore's agent model — one fine-tuned model per task type, one container per agent instance — breaks fast. An organization with 50 workflow types and 100 concurrent tasks would require 50 fine-tuned models and 100 running containers. Each model consumes storage, each container consumes VRAM, and the management overhead grows nonlinearly. By the time you reach 30 task types, you've built yourself an operations problem that rivals running a small cloud provider.
+
+The solution is not to avoid specialization. Specialization is exactly what makes schema-driven agents good. The solution is to make the right distinction between what needs to be unique and what can be shared.
+
+### The Role Type Model
+
+Organizations don't have unique job functions per employee. They have role types — email writer, researcher, analyst, developer — that repeat at scale. The same role type applies to many different instances of work. TrustCore mirrors this structure. The goal is 50–100 distinct role types, each defined by a schema library and optionally a fine-tuned model, covering the overwhelming majority of organizational needs. Agent instances then scale horizontally — multiple containers running the same schema against different tasks — rather than vertically by creating new unique models for every new task type.
+
+This is the difference between a factory with 50 production lines and one with 1000 unique machines. The factory with production lines scales. The one with unique machines does not.
+
+### The Model Registry
+
+Four to six base models cover approximately 90% of all tasks across the agent swarm:
+
+| Model size | Primary use |
+|---|---|
+| 0.5b | Simple classification, routing decisions, intent detection |
+| 3b | Schema execution — the workhorse for most business tasks |
+| 7b | Complex reasoning, novel type handling, technical analysis |
+| 14b | Alex orchestration, user-facing communication, architectural decisions |
+| 35b | Future — complex multi-step reasoning when hardware allows |
+
+Fine-tuned models are created only for three scenarios: tasks where a base model genuinely fails to meet quality threshold even with a well-designed schema; high-volume tasks where even a small quality improvement compounds across thousands of executions; and domain-specific knowledge that cannot be practically encoded in a schema or knowledge base entry.
+
+Tim the Toolman Taylor manages the model registry. When Tim creates or registers a fine-tuned model, he records: the model version, the base model it was fine-tuned from, the training job ID, benchmark scores across all relevant eval dimensions, the task types it covers, current usage metrics, and a retirement threshold. Models that are unused for 90 days and whose covered task types are adequately served by a schema-driven base model are flagged for retirement review. Tim proposes the retirement; a human approves or defers.
+
+### Memory Architecture at Scale
+
+At scale, a flat per-agent memory model creates two problems. First, memory explosion — if every instance of the email-writer writes to its own private journal, the agent_memory table grows O(instances × tasks) rather than O(tasks). Second, knowledge isolation — valuable learning accumulated by one instance is invisible to other instances of the same role.
+
+The solution is a three-tier memory model:
+
+**Shared consciousness** — `unified_memory`, org-wide, always on. Every agent reads it. Every agent writes headlines about what it did. This does not scale with instance count — one record per event regardless of how many instances processed work that day.
+
+**Role memory** — shared by all instances of a role type. All email-writer containers read from and write to the same email-writer agent_memory namespace. A lesson learned by one instance — a recipient preference discovered, a tone calibration that landed well — is immediately available to all other instances. Role memory scales with the number of distinct role types, not the number of instances.
+
+**Individual memory** — namespaced by task, case, or customer, and time-limited. An email thread with a specific client gets its own memory context that lives as long as the engagement and expires when it closes. This prevents memory from accumulating indefinitely while preserving the context that matters for active work.
+
+### Tim the Toolman Taylor — Full Role Definition
+
+Tim is not a codebase maintenance utility. He is the infrastructure lifecycle manager for the entire TrustCore swarm. He is to the agent infrastructure what a lead platform engineer is to a software organization — the person responsible for making sure the tools work, the pipelines are healthy, and the system can grow without collapsing under its own weight.
+
+Tim's responsibilities span six domains:
+
+**Model registry management.** Tim registers new models, tracks versions, runs benchmark suites, monitors quality drift over time, and initiates retirement for obsolete models. He maintains the source of truth for what models are running and why.
+
+**Container lifecycle.** Tim creates new agent containers when a new role type is approved, deploys them following the standard health-check protocol, monitors their ongoing health, and deprecates containers when role types are merged, retired, or replaced by better alternatives.
+
+**Schema versioning.** When a skill schema changes — new fields added, delivery logic updated, eval thresholds adjusted — Tim tracks the version history and migrates any in-flight tasks that were created against an older schema version. Existing tasks never break silently because of a schema change.
+
+**Codebase health monitoring.** Tim runs scheduled sweeps of the codebase looking for patterns that indicate technical debt: duplicated logic that should be shared, growing functions that should be decomposed, test coverage gaps, and dependency drift. He flags findings and proposes remediations, but does not merge changes autonomously — he submits PRs for human review except for clearly mechanical cleanups.
+
+**Autonomous repair.** When Alex's heartbeat detects a service failure and the known_fixes library has no match, Alex invokes Tim. Tim reads the error logs, reads the relevant source files, identifies the probable root cause, writes a fix on a test branch, runs the test suite, and submits a PR if tests pass. If tests fail, he escalates to human attention with a full diagnostic report.
+
+**On-call mode.** Tim is normally scheduled for maintenance windows. Alex can invoke Tim outside those windows for urgent infrastructure issues using priority 1 invocation. Tim has a separate on-call task queue that Alex can write to directly, bypassing normal scheduling.
+
+Tim's model allocation: 9b for routine maintenance tasks (schema validation, container health checks, dependency scans); escalates to 14b for complex architectural decisions that require reasoning across multiple subsystems simultaneously.
+
+### Agent Spawning Protocol
+
+Any permanent agent — Alex, Tim, and future chiefs — can spawn additional instances of a sub-agent role using the same model as the existing instances of that role. The resource manager gates all spawning decisions through `getAvailableSlots(modelName)`, which returns the number of additional instances that can run simultaneously given current VRAM availability and the model's known memory footprint.
+
+Spawned instances are ephemeral. They receive a specific sub-task, execute it, report results to their parent, and terminate. The parent agent that spawned them is permanent. Only permanent agents maintain ongoing memory, heartbeat, and identity. Spawned instances inherit the role's schema library and memory namespace but do not accumulate individual state.
+
+This enables parallel execution of workload spikes without permanent resource commitment. When Tim has twenty files to refactor, he spawns twenty instances that each refactor one file in parallel. When they finish, VRAM is released and the next job can proceed. The system does not need to pre-provision resources for worst-case concurrency — it scales dynamically within the physical VRAM envelope.
+
+---
+
+## Part 12: Soul/User Identity System
+
+### The Problem
+
+Agents in TrustCore's current state have no persistent identity. Each invocation starts fresh with the same generic system prompt. The email-writer does not know who it is, who it is serving, what voice it should write in, or what the user has told it about their communication preferences across all their previous interactions. Every email is written by a stranger who happens to know how to write emails.
+
+This produces three problems that cannot be fixed by better prompting at the call site. First, voice inconsistency — every output sounds like it came from a different person. Second, tone mismatch — the agent cannot calibrate formality, warmth, or urgency to the specific relationship without persistent knowledge of the principal. Third, preference blindness — the user has to re-specify their preferences every time rather than having the system accumulate and apply them automatically.
+
+The Soul/User Identity System solves all three by giving every agent two persistent identity documents that are loaded in full at startup, before any task is processed.
+
+### Two Identity Documents Per Agent
+
+**Soul.md** is the agent's character definition. It describes who the agent is, what it is for, how it communicates, what it will and will not do, and how it relates to other agents in the hierarchy. Soul.md is the agent's professional identity — stable, consistent, and distinctive. It is not a prompt template. It is not a list of instructions. It is a character, written the way a character is written: with voice, with values, with a clear sense of self.
+
+**User.md** is everything the agent knows about who it serves. It contains the principal's name, role, and organizational context; their communication preferences and style; their known tendencies and work patterns; things they always want emphasized; things they never want; and behavioral rules for how the agent should interact with this specific person. User.md is the agent's institutional memory about its principal — accumulated, structured, and always current.
+
+### Two Levels — Shared and Individual
+
+**Shared Soul.md** is TrustCore's collective identity and mission statement. It is the most important document in the system. Every agent reads it. Every decision is made in its context. It defines what TrustCore is as a whole, what it stands for, how it treats people, what principles guide all of its agents, and what it will and will not do regardless of the task. This document functions as the organization's founding charter — the constitutional layer that no individual agent's Soul.md can override. Authoring it requires care and genuine reflection. Get it right and every agent in the swarm carries those values into every task. Get it wrong and you have trained a swarm with the wrong character.
+
+**Shared User.md** is the universal profile for Dave — the human this system serves. Everything the whole system knows about how Dave works, what he values, how he communicates, what he is building, and why. Every agent reads it. Alex uses it for orchestration decisions and priority judgements. Sub-agents use it for output calibration. It is maintained by Alex and updated as Alex's understanding of Dave deepens through accumulated interaction.
+
+**Individual Soul.md** gives each agent its unique character within the shared identity framework. Alex sounds different from the email-writer. The email-writer sounds different from Tim. Each has its own voice, its own expertise framing, its own professional personality — all consistent with the shared Soul but distinctly their own. The analogy is employees who share the same company culture and values but have distinct professional identities that fit their roles.
+
+**Individual User.md** defines who each agent directly serves. Alex's direct principal is Dave. Sub-agents' direct principal is Alex — their immediate orchestrator — with Dave as super-user carrying ultimate authority. This hierarchy matters for tone and communication style. An agent communicates differently in a one-on-one with its direct principal than in a system-wide context, just as an employee is candid with their manager in a private conversation in a way they would not be in an all-hands meeting.
+
+### Implementation
+
+Soul.md and User.md files are stored as special entries in the `knowledge_base` table with a reserved `category` field value of `'identity'`. They are distinguished from ordinary knowledge base entries by this category and by the absence of chunking — identity documents are never split across multiple rows. They load in full.
+
+At agent startup, identity documents are injected directly into the agent's context before any task processing begins. This is not RAG retrieval. There is no embedding search, no similarity threshold, no top-k selection. The documents are fetched by exact category query and prepended to the system context in full, in a fixed order: shared Soul.md first, shared User.md second, individual Soul.md third, individual User.md last. The agent always knows who it is and who it is serving before it reads a single task.
+
+Identity documents are versioned. The `knowledge_base` table records a version number and timestamp for each update. When Dave updates a preference in his User.md, the change takes effect on the next agent restart without requiring any code change. The version history is preserved indefinitely — the system can reconstruct what any agent knew about its principal at any point in time, which is valuable both for debugging unexpected outputs and for understanding how the principal's preferences have evolved.
+
+### Authoring Process
+
+The Shared Soul.md and individual Soul.md documents are authored collaboratively between Dave and Claude in a dedicated conversation — not generated by Claude Code during a build session. This is intentional. Character requires thought. It requires the author to ask: what does this agent actually stand for? What would it refuse? What makes its voice distinctive rather than generic? How does it think about the people it serves? These questions cannot be answered well in a late-night build session when the goal is shipping features. They require a different kind of attention.
+
+Dave's Shared User.md begins as a document Dave writes himself — a statement of how he works, what he values, and what he expects. It is seeded into the system on Day 1. From that point forward, Alex maintains it. As Alex learns more about how Dave works — through task feedback, through observed patterns, through explicit corrections — Alex proposes additions and updates. Dave reviews and approves. The document grows richer over time without requiring Dave to actively maintain it. The system does the work of remembering.
 
 ---
 
