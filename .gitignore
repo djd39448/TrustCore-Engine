@@ -43,3 +43,4 @@ apps/dashboard/node_modules/
 
 # Claude
 .claude/scheduled_tasks.lock
+structure.txt
