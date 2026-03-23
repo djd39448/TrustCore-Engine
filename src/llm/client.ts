@@ -20,6 +20,9 @@ function normalizeOllamaHost(raw: string): string {
 
 const OLLAMA_HOST = normalizeOllamaHost(process.env['OLLAMA_HOST'] ?? 'localhost:11434');
 const LLM_MODEL = process.env['LLM_MODEL'] ?? 'qwen2.5-coder:32b';
+// Keep context window small so the 14b model fits entirely in VRAM (no CPU spill).
+// 4096 is sufficient for task routing, classification, and short summarization.
+const OLLAMA_NUM_CTX = parseInt(process.env['OLLAMA_NUM_CTX'] ?? '4096');
 
 // Approximate VRAM requirements by model name pattern (GB)
 const MODEL_SIZE_MAP: [RegExp, number][] = [
@@ -57,7 +60,7 @@ async function fetchChat(messages: ChatMessage[], model: string): Promise<string
     const response = await fetch(`${OLLAMA_HOST}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, messages, stream: false }),
+      body: JSON.stringify({ model, messages, stream: false, options: { num_ctx: OLLAMA_NUM_CTX } }),
       signal: controller.signal,
     });
 

@@ -79,8 +79,8 @@ services:
       <<: *db-url
       OLLAMA_HOST: http://ollama-gpu1:11434
       OLLAMA_HOST_GPU0: http://ollama-gpu0:11434
-      LLM_MODEL: "qwen3.5:35b-a3b"
-      EVAL_POLL_TIMEOUT_MS: "300000"
+      LLM_MODEL: "qwen2.5:14b"
+      EVAL_POLL_TIMEOUT_MS: "1800000"
     depends_on:
       postgres:
         condition: service_healthy
