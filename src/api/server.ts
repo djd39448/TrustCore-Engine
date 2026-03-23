@@ -101,8 +101,12 @@ export async function startApiServer(): Promise<void> {
   // --- Agents ---
   app.get('/api/agents', async (_req: Request, res: Response) => {
     const result = await query(
-      `SELECT id, slug, display_name, type, description, is_active, created_at
-       FROM agents ORDER BY created_at ASC`
+      `SELECT a.id, a.slug, a.display_name, a.type, a.description, a.is_active, a.created_at,
+              (SELECT um.created_at
+               FROM unified_memory um
+               WHERE um.author_agent_id = a.id AND um.event_type = 'heartbeat'
+               ORDER BY um.created_at DESC LIMIT 1) AS last_heartbeat
+       FROM agents a ORDER BY a.created_at ASC`
     );
     res.json(result.rows);
   });

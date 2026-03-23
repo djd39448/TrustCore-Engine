@@ -6,6 +6,7 @@ export interface Agent {
   description: string;
   is_active: boolean;
   created_at: string;
+  last_heartbeat?: string | null;
 }
 
 export interface Task {

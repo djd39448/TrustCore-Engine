@@ -251,20 +251,32 @@ async function orchestrateTask(task: {
   // 3b. Delegate to sub-agent — dispatch and record, do NOT block waiting for result.
   //     checkCompletedDelegations() in the next heartbeat handles follow-through.
   try {
+    // For email tasks: build a structured schema so the email-writer has full context
+    // and the eval agent can score against the email-outreach rubric.
+    let subTaskDescription = task.description ?? undefined;
+    let dispatchedSchema: Record<string, unknown> | undefined;
+
+    if (targetAgent === 'email-writer') {
+      dispatchedSchema = await buildEmailSchema(task.title, task.description);
+      subTaskDescription = JSON.stringify(dispatchedSchema);
+    }
+
     const { subTaskId } = await dispatch(
       'alex',
       task.id,
       targetAgent,
       task.title,
-      task.description ?? undefined
+      subTaskDescription
     );
 
     // Record the delegation metadata in the parent task result so heartbeat
     // can find and process it without re-reading intermediate state.
+    // schema is stored here so checkCompletedDelegations can pass it to eval.
     await updateTask(task.id, 'in_progress', {
       delegated_to: targetAgent,
       sub_task_id: subTaskId,
       dispatched_at: new Date().toISOString(),
+      ...(dispatchedSchema ? { schema: dispatchedSchema } : {}),
     });
 
     console.log(`[Alex] Dispatched "${task.title}" → ${targetAgent} (sub-task ${subTaskId}) — async, will check on heartbeat`);
@@ -283,6 +295,68 @@ async function orchestrateTask(task: {
 }
 
 // ---------------------------------------------------------------------------
+// Build a structured email schema from task context
+// ---------------------------------------------------------------------------
+
+/**
+ * Use the LLM to extract structured email context from the task title + description.
+ * Falls back to sensible defaults when the LLM is unavailable or extraction fails.
+ * The schema is passed to the email-writer as its task description (JSON string),
+ * and forwarded to the eval agent so it can score against the email-outreach rubric.
+ */
+async function buildEmailSchema(
+  title: string,
+  description: string | null
+): Promise<Record<string, unknown>> {
+  let extracted: Record<string, string> = {};
+
+  const llmResult = await prompt(
+    `Extract structured email context from this task. Return ONLY valid JSON, no prose, no markdown.
+
+Task: "${title}"
+${description ? `Details: ${description}` : ''}
+
+Return JSON with these exact keys:
+{
+  "recipient_name": "<full name if mentioned, else empty string>",
+  "recipient_role": "<job title/role if mentioned, else empty string>",
+  "recipient_company": "<company name if mentioned, else empty string>",
+  "relationship": "<cold|warm|existing — infer from context, default cold>",
+  "context": "<any relevant context about the recipient or situation>",
+  "goal": "<what this email is trying to achieve in one sentence>",
+  "tone": "<professional|friendly|formal — infer from context, default professional>",
+  "length": "<under 150 words|under 200 words|under 300 words — infer from context, default under 200 words>"
+}`,
+    'You are a data extraction assistant. Return only valid JSON with the exact keys requested, nothing else.'
+  );
+
+  if (llmResult) {
+    try {
+      const match = llmResult.match(/\{[\s\S]*\}/);
+      if (match) extracted = JSON.parse(match[0]) as Record<string, string>;
+    } catch {
+      // LLM returned non-JSON — fall through to defaults
+    }
+  }
+
+  return {
+    type: 'email-outreach',
+    recipient: {
+      name: extracted['recipient_name'] ?? '',
+      role: extracted['recipient_role'] ?? '',
+      company: extracted['recipient_company'] ?? '',
+      relationship: extracted['relationship'] ?? 'cold',
+      context: extracted['context'] ?? (description ?? ''),
+    },
+    goal: extracted['goal'] ?? title,
+    tone: extracted['tone'] ?? 'professional',
+    length: extracted['length'] ?? 'under 200 words',
+    constraints: [] as string[],
+    eval: { type: 'email-outreach', priority: 'high' },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Check completed delegations — called every heartbeat.
 // Finds in_progress parent tasks whose child sub-task has reached a terminal
 // state, runs eval on successful results, and marks the parent done.
@@ -295,6 +369,7 @@ async function checkCompletedDelegations(): Promise<void> {
     parent_id: string;
     parent_title: string;
     parent_description: string | null;
+    parent_result: Record<string, unknown> | null;
     child_id: string;
     child_status: string;
     child_result: unknown;
@@ -304,6 +379,7 @@ async function checkCompletedDelegations(): Promise<void> {
       t.id          AS parent_id,
       t.title       AS parent_title,
       t.description AS parent_description,
+      t.result      AS parent_result,
       c.id          AS child_id,
       c.status      AS child_status,
       c.result      AS child_result,
@@ -341,12 +417,16 @@ async function checkCompletedDelegations(): Promise<void> {
     // Sub-agent completed — run eval if result is present
     if (row.child_result) {
       try {
+        // Extract schema stored during dispatch (for email-outreach rubric targeting)
+        const schema = row.parent_result?.['schema'] as Record<string, unknown> | undefined;
+
         const evalResult = await callEvalService({
           taskId: row.child_id,
           taskTitle: row.parent_title,
           taskDescription: row.parent_description ?? null,
           producerAgentSlug: row.producer_slug ?? 'unknown',
           result: row.child_result,
+          schema,
         });
 
         if (evalResult) {
@@ -435,6 +515,7 @@ interface EvalHttpInput {
   result: unknown;
   revisionNumber?: number;
   previousEvalId?: string;
+  schema?: Record<string, unknown>;
 }
 
 /**

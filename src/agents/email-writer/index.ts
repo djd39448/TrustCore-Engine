@@ -45,6 +45,63 @@ export class EmailWriterAgent extends SubAgent {
    */
   async handleTask(task: TaskRecord): Promise<unknown> {
     // -------------------------------------------------------------------------
+    // Schema parsing — description may be a JSON email-outreach schema from Alex
+    // -------------------------------------------------------------------------
+    let schema: Record<string, unknown> | null = null;
+    let effectiveDescription = task.description;
+
+    if (task.description) {
+      try {
+        const parsed = JSON.parse(task.description) as Record<string, unknown>;
+        if (parsed['type'] === 'email-outreach') {
+          schema = parsed;
+        }
+      } catch {
+        // Plain-text description — use as-is
+      }
+    }
+
+    if (schema) {
+      const recipient = schema['recipient'] as Record<string, string> | undefined;
+      const missingFields: string[] = [];
+
+      // All three recipient identifiers are empty — we have no idea who to write to
+      if (!recipient?.['name'] && !recipient?.['role'] && !recipient?.['company']) {
+        missingFields.push('recipient (name, role, and company are all empty)');
+      }
+      if (!schema['goal']) missingFields.push('goal');
+
+      if (missingFields.length > 0) {
+        await this.remember('observation',
+          `Email Writer: flagging incomplete schema — missing: ${missingFields.join(', ')}`,
+          { task_id: task.id, missing_fields: missingFields }
+        );
+        return {
+          flagged: true,
+          reason: `Cannot draft email — required schema fields are empty: ${missingFields.join(', ')}. ` +
+            `Please provide recipient details and a clear goal.`,
+          missing_fields: missingFields,
+          source: 'validation_error',
+        };
+      }
+
+      // Build a rich human-readable description for the LLM draft step
+      const r = recipient ?? {};
+      effectiveDescription = [
+        `Goal: ${schema['goal']}`,
+        r['name'] ? `Recipient name: ${r['name']}` : null,
+        r['role'] ? `Recipient role: ${r['role']}` : null,
+        r['company'] ? `Recipient company: ${r['company']}` : null,
+        r['relationship'] ? `Relationship: ${r['relationship']}` : null,
+        r['context'] ? `Context: ${r['context']}` : null,
+        schema['tone'] ? `Tone: ${schema['tone']}` : null,
+        schema['length'] ? `Target length: ${schema['length']}` : null,
+        (schema['constraints'] as string[] | undefined)?.length
+          ? `Constraints: ${(schema['constraints'] as string[]).join('; ')}` : null,
+      ].filter(Boolean).join('\n');
+    }
+
+    // -------------------------------------------------------------------------
     // Step 1: Research — look up any relevant KB context
     // -------------------------------------------------------------------------
     await this.remember(
@@ -112,13 +169,13 @@ export class EmailWriterAgent extends SubAgent {
       draftMessages.push({
         role: 'user',
         content: `Relevant context:\n${context}\n\n---\n\nWrite an email for: ${task.title}` +
-          (task.description ? `\n\nAdditional requirements: ${task.description}` : ''),
+          (effectiveDescription ? `\n\nAdditional requirements:\n${effectiveDescription}` : ''),
       });
     } else {
       draftMessages.push({
         role: 'user',
         content: `Write an email for: ${task.title}` +
-          (task.description ? `\n\nAdditional requirements: ${task.description}` : ''),
+          (effectiveDescription ? `\n\nAdditional requirements:\n${effectiveDescription}` : ''),
       });
     }
 
@@ -161,7 +218,9 @@ export class EmailWriterAgent extends SubAgent {
       },
       {
         role: 'user',
-        content: `Original brief: "${task.title}"\n\nDraft to review and improve:\n\n${draft}`,
+        content: `Original brief: "${task.title}"` +
+        (effectiveDescription ? `\n\nRequirements:\n${effectiveDescription}` : '') +
+        `\n\nDraft to review and improve:\n\n${draft}`,
       },
     ];
 

@@ -33,6 +33,7 @@ export interface EvalInput {
   result: unknown;           // raw task result to evaluate
   revisionNumber?: number;   // 0 for first eval, 1+ for retries
   previousEvalId?: string;   // self-referential chain
+  schema?: Record<string, unknown>; // task schema for type-specific rubric (e.g. email-outreach)
 }
 
 export interface DimensionScores {
@@ -106,6 +107,42 @@ Scoring guide:
 2.0 = Poor — significant problems
 1.0 = Failing — does not meet requirements`;
 
+/**
+ * Type-specific rubric text injected into the eval prompt when a task schema is present.
+ * The rubric maps generic dimension names to what they mean for this task type,
+ * so the model scores against the actual criteria rather than generic quality.
+ */
+const TASK_RUBRICS: Record<string, string> = {
+  'email-outreach': `
+TASK TYPE: email-outreach
+Use this rubric — these are the criteria for each dimension:
+
+- technical_correctness: Clarity of value proposition. Does the email make a compelling, specific case
+  for why the recipient should respond? Score 5 if the value proposition is crystal-clear and specific
+  to the recipient's context. Score 1 if it's generic filler with no real reason to reply.
+
+- completeness: All required email elements present — subject line, personalised greeting, value
+  proposition body, specific call-to-action, professional sign-off. Score 5 if all elements are strong
+  and complete. Score 1 if key elements (especially CTA or subject) are missing.
+
+- brand_voice: Tone appropriateness for the relationship. Cold outreach = professional, respectful,
+  not overly familiar. Warm intro = warmer but still focused. Score 5 if tone perfectly matches the
+  relationship context. Score 1 if tone is wrong (e.g. overly casual for a first contact).
+
+- recipient_personalization: Personalization quality. Does the email reference the recipient's specific
+  name, role, company, and any known context? Score 5 if highly personalised to the individual.
+  Score 1 if completely generic — could have been sent to anyone.
+
+- clarity: Readability and conciseness. Cold outreach should be under 200 words. Is it easy to scan?
+  Free of jargon? Respects the recipient's time? Score 5 if concise, clear, and easily read in under
+  30 seconds. Score 1 if verbose, repetitive, or hard to follow.
+
+- contextual_appropriateness: Call-to-action quality. Is the CTA specific, low-friction, and aligned
+  with the goal? A good cold outreach CTA asks for a short call or meeting, not a commitment.
+  Score 5 if the CTA is perfectly calibrated for the goal and relationship. Score 1 if missing,
+  too aggressive, or misaligned with the email's goal.`,
+};
+
 // ---------------------------------------------------------------------------
 // Main evaluate() entry point
 // ---------------------------------------------------------------------------
@@ -119,6 +156,7 @@ export async function evaluate(input: EvalInput): Promise<EvalResult> {
     result,
     revisionNumber = 0,
     previousEvalId,
+    schema,
   } = input;
 
   console.log(`[Eval] Evaluating task ${taskId} (rev ${revisionNumber})`);
@@ -147,7 +185,8 @@ export async function evaluate(input: EvalInput): Promise<EvalResult> {
     resultText,
     recipientContext,
     brandVoiceContext,
-    calibrationContext
+    calibrationContext,
+    schema
   );
 
   // --- Call LLM ---
@@ -287,13 +326,39 @@ function buildEvalPrompt(
   result: string,
   recipientContext: string,
   brandVoiceContext: string,
-  calibration: CalibrationContext
+  calibration: CalibrationContext,
+  schema?: Record<string, unknown>
 ): string {
+  // Inject type-specific rubric if we recognise the task type
+  const taskType = (schema?.['type'] as string | undefined)
+    ?? (schema?.['eval'] as Record<string, unknown> | undefined)?.['type'] as string | undefined;
+  const rubric = taskType ? TASK_RUBRICS[taskType] : undefined;
+
   const parts: string[] = [
     `TASK BRIEF:`,
     `Title: ${title}`,
   ];
-  if (description) parts.push(`Description: ${description}`);
+  if (description && !schema) parts.push(`Description: ${description}`);
+
+  // If schema present, surface structured fields clearly
+  if (schema) {
+    const r = schema['recipient'] as Record<string, string> | undefined;
+    if (r) {
+      const recipientLine = [r['name'], r['role'], r['company']].filter(Boolean).join(', ');
+      if (recipientLine) parts.push(`Recipient: ${recipientLine}`);
+      if (r['relationship']) parts.push(`Relationship: ${r['relationship']}`);
+      if (r['context']) parts.push(`Recipient context: ${r['context']}`);
+    }
+    if (schema['goal']) parts.push(`Goal: ${schema['goal']}`);
+    if (schema['tone']) parts.push(`Required tone: ${schema['tone']}`);
+    if (schema['length']) parts.push(`Target length: ${schema['length']}`);
+    const constraints = schema['constraints'] as string[] | undefined;
+    if (constraints?.length) parts.push(`Constraints: ${constraints.join('; ')}`);
+  }
+
+  if (rubric) {
+    parts.push(rubric);
+  }
   if (recipientContext) {
     parts.push(`\nRECIPIENT CONTEXT (from memory):\n${recipientContext}`);
   }

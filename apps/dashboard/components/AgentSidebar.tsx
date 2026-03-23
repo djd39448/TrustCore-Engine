@@ -17,6 +17,15 @@ const TYPE_COLOR: Record<string, string> = {
   system: '#64748b',
 };
 
+function relativeTime(iso: string | null | undefined): string {
+  if (!iso) return 'never';
+  const diff = Date.now() - new Date(iso).getTime();
+  if (diff < 60_000) return `${Math.round(diff / 1000)}s ago`;
+  if (diff < 3_600_000) return `${Math.round(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)}h ago`;
+  return new Date(iso).toLocaleDateString();
+}
+
 export default function AgentSidebar() {
   const { data: agents, error } = useSWR<Agent[]>('/api/agents', fetcher, {
     refreshInterval: 15_000,
@@ -47,6 +56,11 @@ export default function AgentSidebar() {
               />
             </div>
             <p className={styles.desc}>{agent.description}</p>
+            {agent.last_heartbeat !== undefined && (
+              <p className={styles.heartbeat}>
+                ♥ {relativeTime(agent.last_heartbeat)}
+              </p>
+            )}
           </li>
         ))}
       </ul>

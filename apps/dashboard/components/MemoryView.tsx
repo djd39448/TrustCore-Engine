@@ -175,9 +175,10 @@ export default function MemoryView() {
             >
               <option value="">All agents</option>
               <option value="alex">Alex</option>
-              <option value="system">System</option>
+              <option value="eval">Eval</option>
               <option value="email-writer">Email Writer</option>
               <option value="research">Research</option>
+              <option value="system">System</option>
             </select>
             <select
               className={styles.filter}

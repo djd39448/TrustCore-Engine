@@ -17,7 +17,7 @@
 
 import express from 'express';
 import { evaluate, type EvalInput } from './index.js';
-import { writeUnifiedMemory } from '../../mcp/tools.js';
+import { writeUnifiedMemory, writeOwnMemory } from '../../mcp/tools.js';
 
 const PORT = parseInt(process.env['EVAL_PORT'] ?? '3005');
 const HEARTBEAT_INTERVAL_MS = 60_000;
@@ -47,24 +47,30 @@ app.post('/eval', async (req, res) => {
   try {
     const result = await evaluate(input);
 
-    // Fix 2 — write eval result to unified_memory so it surfaces in the activity feed
+    // Write eval result to unified_memory so it surfaces in the shared activity feed
     const importance = result.outcome === 'approved' ? 2
       : result.outcome === 'needs_review' ? 3
       : 4; // needs_revision
 
-    writeUnifiedMemory(
-      'eval',
-      'observation',
-      `Eval complete: ${input.taskTitle} — composite ${result.composite_score.toFixed(2)} → ${result.outcome}`,
-      {
-        task_id: input.taskId,
-        composite_score: result.composite_score,
-        outcome: result.outcome,
-        top_suggestion: result.improvement_suggestions,
-      },
-      importance
-    ).catch((err: unknown) => {
+    const summary = `Eval complete: ${input.taskTitle} — composite ${result.composite_score.toFixed(2)} → ${result.outcome}`;
+    const memContent = {
+      task_id: input.taskId,
+      composite_score: result.composite_score,
+      outcome: result.outcome,
+      top_suggestion: result.improvement_suggestions,
+    };
+
+    writeUnifiedMemory('eval', 'observation', summary, memContent, importance).catch((err: unknown) => {
       console.error('[Eval Server] Failed to write unified_memory:', err instanceof Error ? err.message : String(err));
+    });
+
+    // Write to agent_memory so eval appears in the Individual memory tab
+    writeOwnMemory('eval', 'workflow_step', summary, {
+      ...memContent,
+      scores: result.scores,
+      eval_id: result.evalId,
+    }, importance).catch((err: unknown) => {
+      console.error('[Eval Server] Failed to write agent_memory:', err instanceof Error ? err.message : String(err));
     });
 
     res.json(result);

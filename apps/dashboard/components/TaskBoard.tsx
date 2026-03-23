@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import useSWR, { mutate } from 'swr';
 import { fetcher, createTask } from '@/lib/api';
-import type { Task, Agent, EvalScore } from '@/lib/types';
+import type { Task, Agent, EvalScore, MemoryEvent } from '@/lib/types';
 import styles from './TaskBoard.module.css';
 
 const COLUMNS: { key: Task['status']; label: string; color: string }[] = [
@@ -96,6 +96,56 @@ function TaskCard({ task }: { task: Task }) {
           <EvalPanel taskId={task.id} />
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Shows which agents are actively working in the pipeline right now.
+ * Rendered only in the In Progress column. Detects eval activity by
+ * checking for recent eval observation events in unified_memory.
+ */
+function PipelinePanel({ tasks }: { tasks: Task[] }) {
+  const { data: recentMems } = useSWR<MemoryEvent[]>(
+    '/api/memories?event_type=observation&limit=10',
+    fetcher,
+    { refreshInterval: 5_000 }
+  );
+
+  const alexActive = tasks.some((t) => !t.assigned_to || t.assigned_to === 'alex');
+  const emailActive = tasks.some((t) => t.assigned_to === 'email-writer');
+  const researchActive = tasks.some((t) => t.assigned_to === 'research');
+
+  // Eval is active when Alex has an in_progress parent but email-writer just finished
+  // (Alex is waiting for eval before closing the parent). Detect via recent eval memory.
+  const evalRecentlyActive = (recentMems ?? []).some((m) => {
+    const ageMs = Date.now() - new Date(m.created_at).getTime();
+    return m.agent_slug === 'eval' && ageMs < 180_000; // within last 3 min
+  });
+  const evalActive = alexActive && !emailActive && !researchActive && evalRecentlyActive;
+
+  type Step = { label: string; color: string; status: string };
+  const chain: Step[] = [
+    alexActive ? { label: 'Alex', color: '#6366f1', status: 'orchestrating' } : null,
+    emailActive ? { label: 'Email Writer', color: '#10b981', status: 'drafting' } : null,
+    researchActive ? { label: 'Research', color: '#f59e0b', status: 'researching' } : null,
+    evalActive ? { label: 'Eval', color: '#a855f7', status: 'scoring' } : null,
+  ].filter((x): x is Step => x !== null);
+
+  if (chain.length === 0) return null;
+
+  return (
+    <div className={styles.pipeline}>
+      <span className={styles.pipelineLabel}>Active</span>
+      {chain.map((step, i) => (
+        <span key={step.label} className={styles.pipelineStep}>
+          <span className={styles.pipelineAgent} style={{ background: step.color }}>
+            {step.label}
+          </span>
+          <span className={styles.pipelineStatus}>{step.status}</span>
+          {i < chain.length - 1 && <span className={styles.pipelineArrow}>→</span>}
+        </span>
+      ))}
     </div>
   );
 }
@@ -210,6 +260,9 @@ export default function TaskBoard({ liveTaskIds }: { liveTaskIds: Set<string> })
               <span className={styles.colLabel}>{col.label}</span>
               <span className={styles.colCount}>{byStatus(col.key).length}</span>
             </div>
+            {col.key === 'in_progress' && (
+              <PipelinePanel tasks={byStatus('in_progress')} />
+            )}
             <div className={styles.cards}>
               {byStatus(col.key).map((task) => (
                 <div

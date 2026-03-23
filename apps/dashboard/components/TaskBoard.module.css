@@ -419,3 +419,49 @@
   margin-top: 0.3rem;
   margin-bottom: 0;
 }
+
+/* Pipeline status bar — shown in the In Progress column */
+.pipeline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.4rem 0.5rem;
+  background: #0a1628;
+  border-bottom: 1px solid #1e293b;
+  font-size: 0.65rem;
+}
+
+.pipelineLabel {
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #475569;
+  margin-right: 0.25rem;
+}
+
+.pipelineStep {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.pipelineAgent {
+  font-size: 0.63rem;
+  font-weight: 700;
+  color: #fff;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.pipelineStatus {
+  font-size: 0.6rem;
+  color: #64748b;
+  font-style: italic;
+}
+
+.pipelineArrow {
+  color: #334155;
+  font-size: 0.65rem;
+}
