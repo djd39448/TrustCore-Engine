@@ -23,6 +23,9 @@
  *   This keeps the heartbeat loop non-blocking regardless of how long sub-agents take.
  */
 
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 import { pool, query } from '../../db/client.js';
 import { writeUnifiedMemory, updateTask, resolveAgentId, searchKnowledgeBase, readUnifiedMemory } from '../../mcp/tools.js';
 import { classifyTaskIntent, prompt } from '../../llm/client.js';
@@ -49,6 +52,66 @@ import {
   validate as validateASBCP,
   createEnvelope,
 } from '@asbcp/core';
+
+// ---------------------------------------------------------------------------
+// Soul.md — Alex's identity and governing document
+// ---------------------------------------------------------------------------
+
+/**
+ * Path to SOUL.md, resolved relative to this module file.
+ *
+ * We use import.meta.url (ESM) rather than __dirname (CJS) because the repo
+ * runs under ts-node/esm. `fileURLToPath` converts the file:// URL to an
+ * OS path; `dirname` strips the filename to give us the directory.
+ *
+ * In the Docker container the layout is:
+ *   /app/src/agents/alex/index.ts  ← this file
+ *   /app/src/agents/alex/SOUL.md   ← identity document
+ * so `join(__dirname, 'SOUL.md')` resolves correctly in both dev and prod.
+ */
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const SOUL_PATH = join(__dirname, 'SOUL.md');
+
+/**
+ * Alex's identity document, loaded once at module initialisation.
+ *
+ * SOUL.md is the highest governing document in Alex's decision stack.
+ * It is read in full — never chunked, never summarised, never RAG'd —
+ * because Alex's identity is a foundation, not a retrieval problem.
+ * It must be present before any task runs.
+ *
+ * This variable is set by loadSoul() during runAlex() startup and is then
+ * available for injection into system prompts for the lifetime of the process.
+ * If the file cannot be read, Alex logs a warning and continues with a
+ * minimal identity stub — a missing Soul.md is not fatal, but it is
+ * logged as a high-importance event so it cannot be silently ignored.
+ */
+let SOUL: string | null = null;
+
+/**
+ * Read SOUL.md synchronously from disk and return its text.
+ *
+ * Synchronous read is intentional here: Soul.md must be fully loaded before
+ * any heartbeat or LLM call is allowed to run. An async read would require
+ * propagating a Promise through the entire startup sequence and could allow
+ * a heartbeat to fire before identity is established. The synchronous call
+ * blocks for < 1ms on a local SSD and is the correct trade-off at startup.
+ *
+ * @returns The full text of SOUL.md, or null if the file cannot be read.
+ */
+function loadSoul(): string | null {
+  try {
+    const text = readFileSync(SOUL_PATH, 'utf-8');
+    console.log(`[Alex] Soul.md loaded (${text.length} chars) from ${SOUL_PATH}`);
+    return text;
+  } catch (err) {
+    // Warn loudly but do not crash — Alex can operate without Soul.md but this
+    // state should never persist. The missing-soul event is written to
+    // unified_memory at importance=5 so it surfaces immediately in dashboards.
+    console.error(`[Alex] WARNING: Could not read Soul.md at ${SOUL_PATH}:`, err instanceof Error ? err.message : String(err));
+    return null;
+  }
+}
 
 /** How often Alex wakes up to poll, check delegations, and consolidate memory. */
 const HEARTBEAT_INTERVAL_MS = 60_000; // 1 minute
@@ -87,6 +150,66 @@ const EVAL_SERVICE_URL = (process.env['EVAL_SERVICE_URL'] ?? 'http://localhost:3
 export async function runAlex(): Promise<void> {
   console.log('[Alex] Starting up...');
 
+  // ---------------------------------------------------------------------------
+  // Step 1: Load Soul.md — identity must be established before anything else.
+  //
+  // Soul.md is the highest governing document in Alex's decision stack. Loading
+  // it first ensures that no heartbeat, task, or LLM call runs without Alex's
+  // identity being present. The loaded text is stored in the module-level SOUL
+  // variable, making it available for system prompt injection throughout the
+  // process lifetime.
+  //
+  // After loading, we write the full Soul.md text to unified_memory so that:
+  //   (a) It appears in the Mission Control activity feed at startup, confirming
+  //       which version of Soul.md is active in the running process.
+  //   (b) It is searchable via readUnifiedMemory() — Alex can reference his own
+  //       identity document during enrichment and reasoning steps.
+  //   (c) Any operator monitoring the system can confirm Soul.md loaded correctly
+  //       and which version is governing this session.
+  //
+  // Importance=5 for the missing-soul alert (never silently ignore a missing
+  // identity document). Importance=4 for the successful load (higher than normal
+  // observations — this is a session boundary event).
+  // ---------------------------------------------------------------------------
+  SOUL = loadSoul();
+
+  try {
+    if (SOUL) {
+      await writeUnifiedMemory(
+        'alex',
+        'observation',
+        'Alex Soul.md loaded — identity established',
+        {
+          soul_path: SOUL_PATH,
+          soul_length_chars: SOUL.length,
+          loaded_at: new Date().toISOString(),
+          // Store the full text so it's searchable in unified_memory. This is
+          // intentionally verbose — Soul.md is a short document and must be
+          // present in full, not summarised.
+          soul_text: SOUL,
+        },
+        4
+      );
+      console.log('[Alex] Soul.md written to unified memory');
+    } else {
+      // Soul.md failed to load — write a high-importance alert and continue.
+      // Alex is functional without it but operating without his identity document
+      // is an abnormal state that must be surfaced immediately.
+      await writeUnifiedMemory(
+        'alex',
+        'observation',
+        'WARNING: Alex Soul.md could not be loaded — operating without identity document',
+        { soul_path: SOUL_PATH, error: 'File not found or unreadable' },
+        5
+      );
+    }
+  } catch (err) {
+    console.error('[Alex] Failed to write Soul.md to unified memory:', err);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Step 2: Log the general startup event.
+  // ---------------------------------------------------------------------------
   try {
     await writeUnifiedMemory(
       'alex',
@@ -240,9 +363,17 @@ async function orchestrateTask(task: {
 
   // 3a. Alex handles directly — synchronous (fast, just one LLM call)
   if (targetAgent === 'alex') {
+    // Prepend Soul.md to the system prompt when Alex responds directly.
+    // This ensures his identity and values govern every direct response, not
+    // just his orchestration behaviour. If Soul.md is unavailable, fall back
+    // to the minimal identity string — never send a prompt with no identity.
+    const systemPrompt = SOUL
+      ? `${SOUL}\n\n---\n\nYou are Alex, an AI chief-of-staff. Be concise and actionable.`
+      : 'You are Alex, an AI chief-of-staff. Be concise and actionable.';
+
     const reply = await prompt(
       `Complete this task concisely: "${task.title}"${task.description ? `\n\nDetails: ${task.description}` : ''}`,
-      'You are Alex, an AI chief-of-staff. Be concise and actionable.'
+      systemPrompt
     );
 
     const taskResult = reply
