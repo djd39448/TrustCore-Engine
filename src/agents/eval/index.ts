@@ -389,7 +389,7 @@ function buildEvalPrompt(
  * against what is actually known about that person, not generic criteria.
  * Returns empty string if no recipient observations found (graceful degradation).
  */
-async function fetchRecipientContext(taskTitle: string): Promise<string> {
+async function fetchRecipientContext(_taskTitle: string): Promise<string> {
   try {
     const rows = await query<{ summary: string }>(
       `SELECT summary FROM unified_memory
@@ -410,7 +410,7 @@ async function fetchRecipientContext(taskTitle: string): Promise<string> {
  * the actual documented style rather than guessing what "on-brand" means.
  * Returns empty string if no brand voice KB entries exist.
  */
-async function fetchBrandVoiceContext(taskTitle: string): Promise<string> {
+async function fetchBrandVoiceContext(_taskTitle: string): Promise<string> {
   try {
     const kbResults = await searchKnowledgeBase('brand voice style guidelines tone', 'eval', 3);
     if (kbResults.length > 0) {
