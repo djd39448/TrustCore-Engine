@@ -55,7 +55,7 @@ const GetConsolidationsSchema = z.object({
 // Tool handlers
 // ---------------------------------------------------------------------------
 
-async function getRecentActivity(input: z.infer<typeof GetRecentActivitySchema>) {
+async function getRecentActivity(input: z.infer<typeof GetRecentActivitySchema>): Promise<unknown[]> {
   const conditions: string[] = ['um.is_archived = false'];
   const params: unknown[] = [];
 
@@ -85,7 +85,7 @@ async function getRecentActivity(input: z.infer<typeof GetRecentActivitySchema>)
   return result.rows;
 }
 
-async function getTasks(input: z.infer<typeof GetTasksSchema>) {
+async function getTasks(input: z.infer<typeof GetTasksSchema>): Promise<unknown[]> {
   const conditions: string[] = [];
   const params: unknown[] = [];
 
@@ -117,7 +117,7 @@ async function getTasks(input: z.infer<typeof GetTasksSchema>) {
   return result.rows;
 }
 
-async function getConsolidations(input: z.infer<typeof GetConsolidationsSchema>) {
+async function getConsolidations(input: z.infer<typeof GetConsolidationsSchema>): Promise<unknown[]> {
   const result = await query(
     `SELECT mc.id, mc.memory_count, mc.time_range_start, mc.time_range_end,
             mc.created_at, um.summary as consolidation_summary
@@ -140,7 +140,7 @@ export async function startMissionControlMcpServer(): Promise<void> {
     { capabilities: { tools: {} } }
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  server.setRequestHandler(ListToolsRequestSchema, () => Promise.resolve({
     tools: [
       {
         name: 'get_recent_activity',
@@ -220,9 +220,13 @@ export async function startMissionControlMcpServer(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
-  process.on('SIGINT', async () => {
-    await pool.end();
-    process.exit(0);
+  process.on('SIGINT', () => {
+    pool.end()
+      .then(() => process.exit(0))
+      .catch((err: unknown) => {
+        console.error('[MC-MCP] Error during shutdown:', err);
+        process.exit(1);
+      });
   });
 
   console.error('[MC-MCP] Mission Control MCP server running on stdio');

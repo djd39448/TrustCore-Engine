@@ -221,7 +221,7 @@ async function writeSummary(): Promise<void> {
     { gpus: latestStats, sampled_at: new Date().toISOString() },
     2
   );
-  console.log('[ResourceManager] Wrote 30-min GPU summary to unified_memory');
+  console.error('[ResourceManager] Wrote 30-min GPU summary to unified_memory');
 }
 
 // ---------------------------------------------------------------------------
@@ -236,10 +236,11 @@ function drainQueue(): void {
 
   let dispatched = false;
   for (let i = 0; i < pendingQueue.length; i++) {
-    const req = pendingQueue[i]!;
+    const req = pendingQueue[i];
+    if (!req) break; // loop bound guarantees i < pendingQueue.length, but guard for TS
     if (canDispatchNow(req.modelName)) {
       pendingQueue.splice(i, 1);
-      console.log(`[ResourceManager] GPU0: slot freed — dispatching queued request (${req.modelName})`);
+      console.error(`[ResourceManager] GPU0: slot freed — dispatching queued request (${req.modelName})`);
       req.resolve();
       dispatched = true;
       break; // one at a time; next poll will drain more if available
@@ -287,7 +288,7 @@ async function poll(): Promise<void> {
  */
 export function getAvailableSlots(modelName: string): number {
   if (GPU1_RESERVED_MODELS.includes(modelName)) return 0;
-  const modelVramMB = (MODEL_VRAM_GB[modelName] ?? MODEL_VRAM_GB['default']!) * 1024;
+  const modelVramMB = (MODEL_VRAM_GB[modelName] ?? MODEL_VRAM_GB['default']) * 1024;
   const availableMB = GPU0_AVAILABLE_MB - currentGpu0VramUsedMB;
   return Math.max(0, Math.floor(availableMB / modelVramMB));
 }
@@ -313,19 +314,18 @@ export function recommendHost(modelName: string): string {
  * priority: use PRIORITY.ALEX_ROUTING | SUB_AGENT | EMBEDDING | FACTORY
  */
 export function acquireSlot(modelName: string, priority: number): Promise<void> {
-  const modelVramMB = (MODEL_VRAM_GB[modelName] ?? MODEL_VRAM_GB['default']!) * 1024;
+  const modelVramMB = (MODEL_VRAM_GB[modelName] ?? MODEL_VRAM_GB['default']) * 1024;
   const slots = getAvailableSlots(modelName);
   const usedMB = currentGpu0VramUsedMB;
-  const availableMB = GPU0_AVAILABLE_MB - usedMB;
 
   if (slots > 0) {
     const slotNum = (Math.floor(usedMB / modelVramMB)) + 1;
     const maxSlots = Math.floor(GPU0_AVAILABLE_MB / modelVramMB);
-    console.log(`[ResourceManager] GPU0: dispatching ${modelName} (slot ${slotNum}/${maxSlots} — ${usedMB}MB/${GPU0_AVAILABLE_MB}MB used)`);
+    console.error(`[ResourceManager] GPU0: dispatching ${modelName} (slot ${slotNum}/${maxSlots} — ${usedMB}MB/${GPU0_AVAILABLE_MB}MB used)`);
     return Promise.resolve();
   }
 
-  console.log(`[ResourceManager] GPU0: queuing request for ${modelName} (0 slots available — ${usedMB}MB/${GPU0_AVAILABLE_MB}MB used)`);
+  console.error(`[ResourceManager] GPU0: queuing request for ${modelName} (0 slots available — ${usedMB}MB/${GPU0_AVAILABLE_MB}MB used)`);
   return new Promise<void>((resolve) => {
     pendingQueue.push({ priority, modelName, resolve, enqueuedAt: Date.now() });
   });
@@ -398,9 +398,9 @@ export function canLoadModel(modelSizeGB: number): boolean {
 
 /** Starts the polling loop. Call once at process startup. */
 export function startResourceManager(): void {
-  console.log('[ResourceManager] Starting GPU polling (every 5s, summaries every 30m)');
-  console.log(`[ResourceManager] GPU0 usable VRAM: ${GPU0_AVAILABLE_MB}MB (${GPU0_TOTAL_VRAM_MB}MB total − ${GPU0_HEADROOM_MB}MB headroom)`);
-  console.log(`[ResourceManager] GPU1 reserved models: ${GPU1_RESERVED_MODELS.join(', ')}`);
+  console.error('[ResourceManager] Starting GPU polling (every 5s, summaries every 30m)');
+  console.error(`[ResourceManager] GPU0 usable VRAM: ${GPU0_AVAILABLE_MB}MB (${GPU0_TOTAL_VRAM_MB}MB total − ${GPU0_HEADROOM_MB}MB headroom)`);
+  console.error(`[ResourceManager] GPU1 reserved models: ${GPU1_RESERVED_MODELS.join(', ')}`);
   void poll();
   pollTimer = setInterval(() => void poll(), POLL_INTERVAL_MS);
   summaryTimer = setInterval(() => void writeSummary(), SUMMARY_INTERVAL_MS);

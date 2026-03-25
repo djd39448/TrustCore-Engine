@@ -48,7 +48,6 @@ import type { EvalResult } from '../eval/index.js';
  */
 import {
   type TaskMessage,
-  TaskMessageSchema,
   validate as validateASBCP,
   createEnvelope,
 } from '@asbcp/core';
@@ -102,7 +101,7 @@ let SOUL: string | null = null;
 function loadSoul(): string | null {
   try {
     const text = readFileSync(SOUL_PATH, 'utf-8');
-    console.log(`[Alex] Soul.md loaded (${text.length} chars) from ${SOUL_PATH}`);
+    console.error(`[Alex] Soul.md loaded (${text.length} chars) from ${SOUL_PATH}`);
     return text;
   } catch (err) {
     // Warn loudly but do not crash — Alex can operate without Soul.md but this
@@ -148,7 +147,7 @@ const EVAL_SERVICE_URL = (process.env['EVAL_SERVICE_URL'] ?? 'http://localhost:3
  * Registers a SIGINT handler for graceful shutdown.
  */
 export async function runAlex(): Promise<void> {
-  console.log('[Alex] Starting up...');
+  console.error('[Alex] Starting up...');
 
   // ---------------------------------------------------------------------------
   // Step 1: Load Soul.md — identity must be established before anything else.
@@ -190,7 +189,7 @@ export async function runAlex(): Promise<void> {
         },
         4
       );
-      console.log('[Alex] Soul.md written to unified memory');
+      console.error('[Alex] Soul.md written to unified memory');
     } else {
       // Soul.md failed to load — write a high-importance alert and continue.
       // Alex is functional without it but operating without his identity document
@@ -218,36 +217,38 @@ export async function runAlex(): Promise<void> {
       { message: `Alex chief-of-staff initialized at ${new Date().toISOString()}` },
       3
     );
-    console.log('[Alex] Logged startup event to unified memory');
+    console.error('[Alex] Logged startup event to unified memory');
   } catch (err) {
     console.error('[Alex] Failed to write startup event:', err);
   }
-  console.log('[Alex] Entering heartbeat loop (every 60s)');
+  console.error('[Alex] Entering heartbeat loop (every 60s)');
 
   // Run one heartbeat immediately, then schedule recurring
   await heartbeat();
 
-  const interval = setInterval(async () => {
-    try {
-      await heartbeat();
-    } catch (err) {
+  const interval = setInterval(() => {
+    heartbeat().catch((err: unknown) => {
       console.error('[Alex] Heartbeat error:', err);
-    }
+    });
   }, HEARTBEAT_INTERVAL_MS);
 
   // Graceful shutdown
-  process.on('SIGINT', async () => {
-    console.log('\n[Alex] Shutting down...');
+  process.on('SIGINT', () => {
+    console.error('\n[Alex] Shutting down...');
     clearInterval(interval);
-    await writeUnifiedMemory(
+    writeUnifiedMemory(
       'alex',
       'observation',
       'Alex agent stopped gracefully',
       { message: `Alex shut down at ${new Date().toISOString()}` },
       2
-    );
-    await pool.end();
-    process.exit(0);
+    )
+      .then(() => pool.end())
+      .then(() => process.exit(0))
+      .catch((err: unknown) => {
+        console.error('[Alex] Error during shutdown:', err);
+        process.exit(1);
+      });
   });
 }
 
@@ -263,7 +264,7 @@ export async function runAlex(): Promise<void> {
  */
 async function heartbeat(): Promise<void> {
   const ts = new Date().toISOString();
-  console.log(`[Alex] Heartbeat at ${ts}`);
+  console.error(`[Alex] Heartbeat at ${ts}`);
 
   try {
     await writeUnifiedMemory(
@@ -310,10 +311,10 @@ async function pollPendingTasks(): Promise<void> {
 
   if (result.rows.length === 0) return;
 
-  console.log(`[Alex] Found ${result.rows.length} pending task(s)`);
+  console.error(`[Alex] Found ${result.rows.length} pending task(s)`);
 
   for (const task of result.rows) {
-    console.log(`[Alex] Processing task: ${task.title} (${task.id})`);
+    console.error(`[Alex] Processing task: ${task.title} (${task.id})`);
 
     await updateTask(task.id, 'in_progress');
     await orchestrateTask(task);
@@ -356,9 +357,9 @@ async function orchestrateTask(task: {
     } else {
       targetAgent = 'alex';
     }
-    console.log(`[Alex] LLM unavailable — keyword fallback: routed to '${targetAgent}'`);
+    console.error(`[Alex] LLM unavailable — keyword fallback: routed to '${targetAgent}'`);
   } else {
-    console.log(`[Alex] LLM classified task as '${targetAgent}'`);
+    console.error(`[Alex] LLM classified task as '${targetAgent}'`);
   }
 
   // 3a. Alex handles directly — synchronous (fast, just one LLM call)
@@ -407,7 +408,7 @@ async function orchestrateTask(task: {
     if (agentBusy) {
       // Revert parent to pending — will be picked up on next heartbeat poll.
       await updateTask(task.id, 'pending');
-      console.log(`[Alex] ${targetAgent} is busy — deferred "${task.title}" to next heartbeat`);
+      console.error(`[Alex] ${targetAgent} is busy — deferred "${task.title}" to next heartbeat`);
       return;
     }
 
@@ -466,7 +467,7 @@ async function orchestrateTask(task: {
       schema: enrichedSchema,
     });
 
-    console.log(`[Alex] Dispatched "${task.title}" → ${targetAgent} (sub-task ${subTaskId}) — async, will check on heartbeat`);
+    console.error(`[Alex] Dispatched "${task.title}" → ${targetAgent} (sub-task ${subTaskId}) — async, will check on heartbeat`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[Alex] Delegation failed: ${message}`);
@@ -519,14 +520,15 @@ async function guardAgentBusy(parentTaskId: string, agentSlug: string): Promise<
     [agentSlug, parentTaskId]
   );
 
-  if (result.rows.length > 0) {
+  const blockingTask = result.rows[0];
+  if (blockingTask) {
     await writeUnifiedMemory(
       'alex',
       'observation',
-      `Alex deferred dispatch to ${agentSlug} — agent busy (task ${result.rows[0]!.id} in progress)`,
+      `Alex deferred dispatch to ${agentSlug} — agent busy (task ${blockingTask.id} in progress)`,
       {
         deferred_parent_id: parentTaskId,
-        blocking_task_id: result.rows[0]!.id,
+        blocking_task_id: blockingTask.id,
         agent: agentSlug,
       },
       2
@@ -803,7 +805,7 @@ In 2-3 sentences, write strategic notes for the sub-agent: what context is most 
     }
   }
 
-  console.log(`[Alex] Enriched task ${taskId}: ${contextSources.length} context sources`);
+  console.error(`[Alex] Enriched task ${taskId}: ${contextSources.length} context sources`);
 
   return {
     ...intentSchema,
@@ -855,7 +857,7 @@ async function checkCompletedDelegations(): Promise<void> {
   `);
 
   for (const row of completed.rows) {
-    console.log(`[Alex] Sub-task ${row.child_id} finished with status '${row.child_status}' — processing parent ${row.parent_id}`);
+    console.error(`[Alex] Sub-task ${row.child_id} finished with status '${row.child_status}' — processing parent ${row.parent_id}`);
 
     if (row.child_status === 'failed') {
       // Sub-agent failed — propagate failure to parent
@@ -890,9 +892,9 @@ async function checkCompletedDelegations(): Promise<void> {
         });
 
         if (evalResult) {
-          console.log(`[Alex] Eval: ${evalResult.composite_score.toFixed(2)} → ${evalResult.outcome}`);
+          console.error(`[Alex] Eval: ${evalResult.composite_score.toFixed(2)} → ${evalResult.outcome}`);
           if (evalResult.outcome === 'needs_review') {
-            console.log(`[Alex] Flagging task ${row.parent_id} for human review`);
+            console.error(`[Alex] Flagging task ${row.parent_id} for human review`);
             await writeUnifiedMemory(
               'alex',
               'observation',
@@ -943,7 +945,7 @@ async function checkCompletedDelegations(): Promise<void> {
   `, [timeoutSeconds]);
 
   for (const row of timedOut.rows) {
-    console.log(`[Alex] Task timeout: "${row.parent_title}" — sub-task ${row.child_id} did not complete in ${timeoutSeconds}s`);
+    console.error(`[Alex] Task timeout: "${row.parent_title}" — sub-task ${row.child_id} did not complete in ${timeoutSeconds}s`);
 
     await updateTask(row.child_id, 'failed', {
       error: 'timeout',
@@ -1042,7 +1044,7 @@ async function consolidateOldMemories(): Promise<void> {
 
   if (result.rows.length === 0) return;
 
-  console.log(`[Alex] Consolidating ${result.rows.length} old memory entries`);
+  console.error(`[Alex] Consolidating ${result.rows.length} old memory entries`);
 
   const rows = result.rows as Array<{ id: string; summary: string }>;
   const bulletList = rows.map((r) => `- ${r.summary}`).join('\n');
@@ -1079,7 +1081,11 @@ async function consolidateOldMemories(): Promise<void> {
     [summaryMemory.id, range?.min_ts ?? new Date(), range?.max_ts ?? new Date(), rows.length, alexId]
   );
 
-  const consolidationId = consResult.rows[0]!.id;
+  const consolidationRow = consResult.rows[0];
+  if (!consolidationRow) {
+    throw new Error('Consolidation INSERT returned no row — this indicates a database error');
+  }
+  const consolidationId = consolidationRow.id;
   const ids = rows.map((r) => r.id);
 
   await query(
@@ -1089,5 +1095,5 @@ async function consolidateOldMemories(): Promise<void> {
     [consolidationId, ids]
   );
 
-  console.log(`[Alex] Consolidated ${ids.length} memories → ${consolidationId}`);
+  console.error(`[Alex] Consolidated ${ids.length} memories → ${consolidationId}`);
 }

@@ -221,9 +221,9 @@ export async function startMcpServer(): Promise<void> {
     { capabilities: { tools: {} } }
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: TOOL_DEFINITIONS,
-  }));
+  server.setRequestHandler(ListToolsRequestSchema, () =>
+    Promise.resolve({ tools: TOOL_DEFINITIONS })
+  );
 
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const { name, arguments: args } = req.params;

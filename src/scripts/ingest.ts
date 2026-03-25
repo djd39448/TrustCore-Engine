@@ -91,11 +91,14 @@ async function ingestFile(
   const title = path.basename(filePath);
   const chunks = chunkText(content, chunkSize, overlap);
 
-  console.log(`  Ingesting ${filePath} → ${chunks.length} chunk(s)`);
+  console.error(`  Ingesting ${filePath} → ${chunks.length} chunk(s)`);
 
   let stored = 0;
   for (let i = 0; i < chunks.length; i++) {
-    const chunk = chunks[i]!;
+    const chunk = chunks[i];
+    if (chunk === undefined) {
+      throw new Error(`Chunk ${i} is undefined — this indicates a bug in chunkText()`);
+    }
     const embedding = await embed(chunk);
 
     await query(
@@ -136,34 +139,49 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
 
   if (args.length === 0 || args[0] === '--help') {
-    console.log('Usage: node --loader ts-node/esm src/scripts/ingest.ts <path> [options]');
-    console.log('Options:');
-    console.log('  --agent <slug>      Store as agent-scoped knowledge');
-    console.log('  --chunk-size <N>    Characters per chunk (default: 1500)');
-    console.log('  --overlap <N>       Overlap characters (default: 200)');
-    console.log('  --source <name>     Override source label');
+    console.error('Usage: node --loader ts-node/esm src/scripts/ingest.ts <path> [options]');
+    console.error('Options:');
+    console.error('  --agent <slug>      Store as agent-scoped knowledge');
+    console.error('  --chunk-size <N>    Characters per chunk (default: 1500)');
+    console.error('  --overlap <N>       Overlap characters (default: 200)');
+    console.error('  --source <name>     Override source label');
     process.exit(0);
   }
 
-  const inputPath = args[0]!;
+  const inputPath = args[0];
+  if (inputPath === undefined) {
+    // Should never happen — args.length === 0 is caught above
+    throw new Error('No input path in args — args.length check failed');
+  }
+
   let agentSlug: string | undefined;
   let chunkSize = 1500;
   let overlap = 200;
   let sourceOverride: string | undefined;
 
   for (let i = 1; i < args.length; i++) {
-    if (args[i] === '--agent' && args[i + 1]) agentSlug = args[++i];
-    else if (args[i] === '--chunk-size' && args[i + 1]) chunkSize = parseInt(args[++i]!, 10);
-    else if (args[i] === '--overlap' && args[i + 1]) overlap = parseInt(args[++i]!, 10);
-    else if (args[i] === '--source' && args[i + 1]) sourceOverride = args[++i];
+    if (args[i] === '--agent' && args[i + 1]) { agentSlug = args[++i]; }
+    else if (args[i] === '--chunk-size' && args[i + 1]) {
+      i++;
+      const val = args[i];
+      if (val === undefined) throw new Error('--chunk-size requires a value');
+      chunkSize = parseInt(val, 10);
+    }
+    else if (args[i] === '--overlap' && args[i + 1]) {
+      i++;
+      const val = args[i];
+      if (val === undefined) throw new Error('--overlap requires a value');
+      overlap = parseInt(val, 10);
+    }
+    else if (args[i] === '--source' && args[i + 1]) { sourceOverride = args[++i]; }
   }
 
   let agentId: string | null = null;
   if (agentSlug) {
     agentId = await resolveAgentId(agentSlug);
-    console.log(`Ingesting as private knowledge for agent: ${agentSlug} (${agentId})`);
+    console.error(`Ingesting as private knowledge for agent: ${agentSlug} (${agentId})`);
   } else {
-    console.log('Ingesting as global knowledge');
+    console.error('Ingesting as global knowledge');
   }
 
   if (!fs.existsSync(inputPath)) {
@@ -172,7 +190,7 @@ async function main(): Promise<void> {
   }
 
   const files = collectFiles(inputPath);
-  console.log(`Found ${files.length} file(s) to ingest`);
+  console.error(`Found ${files.length} file(s) to ingest`);
 
   let totalChunks = 0;
   for (const file of files) {
@@ -180,7 +198,7 @@ async function main(): Promise<void> {
     totalChunks += count;
   }
 
-  console.log(`\nIngestion complete: ${totalChunks} chunk(s) stored from ${files.length} file(s)`);
+  console.error(`\nIngestion complete: ${totalChunks} chunk(s) stored from ${files.length} file(s)`);
   await pool.end();
 }
 

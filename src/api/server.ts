@@ -87,7 +87,7 @@ async function pollAndBroadcast(): Promise<void> {
 // Express routes
 // ---------------------------------------------------------------------------
 
-export async function startApiServer(): Promise<void> {
+export function startApiServer(): void {
   const app = express();
   app.use(express.json());
 
@@ -185,7 +185,12 @@ export async function startApiServer(): Promise<void> {
       [createdById, assignedToId, title, description ?? null]
     );
 
-    const taskId = result.rows[0]!.id;
+    const taskRow = result.rows[0];
+    if (!taskRow) {
+      res.status(500).json({ error: 'Task INSERT returned no row — database error' });
+      return;
+    }
+    const taskId = taskRow.id;
     broadcast('task_created', { id: taskId, title, assigned_to, status: 'pending' });
     res.status(201).json({ id: taskId });
   });
@@ -352,7 +357,10 @@ export async function startApiServer(): Promise<void> {
 
     const inserted: string[] = [];
     for (let i = 0; i < chunks.length; i++) {
-      const chunkText = chunks[i]!;
+      const chunkText = chunks[i];
+      if (chunkText === undefined) {
+        throw new Error(`Chunk ${i} is undefined — this indicates a bug in chunking logic`);
+      }
       const embedding = await embed(chunkText);
       const embeddingParam = embedding ? toVectorLiteral(embedding) : null;
       const chunkTitle = chunks.length === 1 ? title : `${title} (${i + 1}/${chunks.length})`;
@@ -361,7 +369,11 @@ export async function startApiServer(): Promise<void> {
          VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
         [chunkTitle, chunkText, source, i, embeddingParam, embeddingParam ? 'nomic-embed-text' : null]
       );
-      inserted.push(result.rows[0]!.id);
+      const insertedRow = result.rows[0];
+      if (!insertedRow) {
+        throw new Error('Knowledge base chunk INSERT returned no row — database error');
+      }
+      inserted.push(insertedRow.id);
     }
 
     res.status(201).json({ chunks: inserted.length, ids: inserted, source });
@@ -568,7 +580,12 @@ export async function startApiServer(): Promise<void> {
        VALUES ($1, $2, $3, 'pending') RETURNING id`,
       [createdById, alexId, message.trim()]
     );
-    const taskId = taskResult.rows[0]!.id;
+    const chatTaskRow = taskResult.rows[0];
+    if (!chatTaskRow) {
+      res.status(500).json({ error: 'Chat task INSERT returned no row — database error' });
+      return;
+    }
+    const taskId = chatTaskRow.id;
     broadcast('task_created', { id: taskId, title: message.trim(), status: 'pending' });
 
     // Poll for up to 90s (every 1.5s = 60 polls)
@@ -674,29 +691,37 @@ export async function startApiServer(): Promise<void> {
   wss = new WebSocketServer({ server: httpServer });
 
   wss.on('connection', (ws) => {
-    console.log('[API] WebSocket client connected');
+    console.error('[API] WebSocket client connected');
     ws.send(JSON.stringify({ event: 'connected', ts: new Date().toISOString() }));
-    ws.on('close', () => console.log('[API] WebSocket client disconnected'));
+    ws.on('close', () => console.error('[API] WebSocket client disconnected'));
   });
 
   // Poll DB every 2s and push updates to connected WS clients
-  const pollInterval = setInterval(pollAndBroadcast, 2000);
+  const pollInterval = setInterval(() => {
+    pollAndBroadcast().catch((err: unknown) => {
+      console.error('[API] Poll error:', err);
+    });
+  }, 2000);
 
   // Start GPU resource manager
   startResourceManager();
 
   httpServer.listen(PORT, () => {
-    console.log(`[API] Mission Control API listening on http://localhost:${PORT}`);
-    console.log(`[API] WebSocket available at ws://localhost:${PORT}`);
+    console.error(`[API] Mission Control API listening on http://localhost:${PORT}`);
+    console.error(`[API] WebSocket available at ws://localhost:${PORT}`);
   });
 
-  process.on('SIGINT', async () => {
-    console.log('\n[API] Shutting down...');
+  process.on('SIGINT', () => {
+    console.error('\n[API] Shutting down...');
     clearInterval(pollInterval);
     stopResourceManager();
     wss.close();
     httpServer.close();
-    await pool.end();
-    process.exit(0);
+    pool.end()
+      .then(() => process.exit(0))
+      .catch((err: unknown) => {
+        console.error('[API] Error during shutdown:', err);
+        process.exit(1);
+      });
   });
 }

@@ -15,7 +15,8 @@
  * because every downstream operation would fail anyway.
  */
 
-import { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
+import { Pool } from 'pg';
+import type { PoolClient, QueryResult, QueryResultRow } from 'pg';
 
 // Load .env if present
 import * as fs from 'fs';

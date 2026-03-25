@@ -109,10 +109,11 @@ export async function resolveAgentId(agentSlug: string): Promise<string> {
     'SELECT id FROM agents WHERE slug = $1 AND is_active = true',
     [agentSlug]
   );
-  if (result.rows.length === 0) {
+  const agentRow = result.rows[0];
+  if (!agentRow) {
     throw new Error(`Agent not found: ${agentSlug}`);
   }
-  return result.rows[0]!.id;
+  return agentRow.id;
 }
 
 // ---------------------------------------------------------------------------
@@ -241,7 +242,11 @@ export async function writeUnifiedMemory(
     ]
   );
 
-  return { id: result.rows[0]!.id };
+  const insertedRow = result.rows[0];
+  if (!insertedRow) {
+    throw new Error('writeUnifiedMemory INSERT returned no row — database error');
+  }
+  return { id: insertedRow.id };
 }
 
 // ---------------------------------------------------------------------------
@@ -342,7 +347,11 @@ export async function writeOwnMemory(
     ]
   );
 
-  return { id: result.rows[0]!.id };
+  const insertedRow = result.rows[0];
+  if (!insertedRow) {
+    throw new Error('writeOwnMemory INSERT returned no row — database error');
+  }
+  return { id: insertedRow.id };
 }
 
 // ---------------------------------------------------------------------------
@@ -384,7 +393,11 @@ export async function logToolCall(
     ]
   );
 
-  return { id: result.rows[0]!.id };
+  const insertedRow = result.rows[0];
+  if (!insertedRow) {
+    throw new Error('logToolCall INSERT returned no row — database error');
+  }
+  return { id: insertedRow.id };
 }
 
 // ---------------------------------------------------------------------------
@@ -419,7 +432,11 @@ export async function createTask(
     [createdById, assignedToId, title, description ?? null, parentTaskId ?? null]
   );
 
-  return { id: result.rows[0]!.id };
+  const insertedRow = result.rows[0];
+  if (!insertedRow) {
+    throw new Error('createTask INSERT returned no row — database error');
+  }
+  return { id: insertedRow.id };
 }
 
 // ---------------------------------------------------------------------------

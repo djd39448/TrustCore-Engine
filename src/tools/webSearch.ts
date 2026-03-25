@@ -90,9 +90,11 @@ function parseResults(html: string, maxResults: number): SearchResult[] {
   }
 
   for (let i = 0; i < Math.min(links.length, maxResults); i++) {
+    const link = links[i];
+    if (!link) break; // loop bound guarantees i < links.length, but guard for TS
     results.push({
-      title: links[i]!.title,
-      url: links[i]!.url,
+      title: link.title,
+      url: link.url,
       snippet: snippets[i] ?? '',
     });
   }

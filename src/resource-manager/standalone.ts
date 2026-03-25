@@ -11,18 +11,26 @@
 import { pool } from '../db/client.js';
 import { startResourceManager, stopResourceManager } from './index.js';
 
-console.log('[ResourceManager] Standalone process starting');
+console.error('[ResourceManager] Standalone process starting');
 startResourceManager();
 
-process.on('SIGINT', async () => {
-  console.log('\n[ResourceManager] Shutting down...');
+process.on('SIGINT', () => {
+  console.error('\n[ResourceManager] Shutting down...');
   stopResourceManager();
-  await pool.end();
-  process.exit(0);
+  pool.end()
+    .then(() => process.exit(0))
+    .catch((err: unknown) => {
+      console.error('[ResourceManager] Error during shutdown:', err);
+      process.exit(1);
+    });
 });
 
-process.on('SIGTERM', async () => {
+process.on('SIGTERM', () => {
   stopResourceManager();
-  await pool.end();
-  process.exit(0);
+  pool.end()
+    .then(() => process.exit(0))
+    .catch((err: unknown) => {
+      console.error('[ResourceManager] Error during SIGTERM shutdown:', err);
+      process.exit(1);
+    });
 });

@@ -53,8 +53,13 @@ export const queueEvents = new EventEmitter();
 function heapUp(i: number): void {
   while (i > 0) {
     const parent = Math.floor((i - 1) / 2);
-    if (heap[parent]!.priority <= heap[i]!.priority) break;
-    [heap[parent], heap[i]] = [heap[i]!, heap[parent]!];
+    const parentItem = heap[parent];
+    const currentItem = heap[i];
+    if (!parentItem || !currentItem) {
+      throw new Error(`heapUp: index ${parent} or ${i} is out of heap bounds — heap integrity violation`);
+    }
+    if (parentItem.priority <= currentItem.priority) break;
+    [heap[parent], heap[i]] = [currentItem, parentItem];
     i = parent;
   }
 }
@@ -65,10 +70,25 @@ function heapDown(i: number): void {
     let min = i;
     const l = 2 * i + 1;
     const r = 2 * i + 2;
-    if (l < n && heap[l]!.priority < heap[min]!.priority) min = l;
-    if (r < n && heap[r]!.priority < heap[min]!.priority) min = r;
+    const lItem = heap[l];
+    const minItem = heap[min];
+    if (!minItem) {
+      throw new Error(`heapDown: index ${min} is out of heap bounds — heap integrity violation`);
+    }
+    if (l < n && lItem && lItem.priority < minItem.priority) min = l;
+    const rItem = heap[r];
+    const newMinItem = heap[min];
+    if (!newMinItem) {
+      throw new Error(`heapDown: index ${min} is out of heap bounds after left comparison`);
+    }
+    if (r < n && rItem && rItem.priority < newMinItem.priority) min = r;
     if (min === i) break;
-    [heap[min], heap[i]] = [heap[i]!, heap[min]!];
+    const iItem = heap[i];
+    const swapItem = heap[min];
+    if (!iItem || !swapItem) {
+      throw new Error(`heapDown: swap indices ${i} or ${min} are out of heap bounds`);
+    }
+    [heap[min], heap[i]] = [iItem, swapItem];
     i = min;
   }
 }
@@ -76,7 +96,11 @@ function heapDown(i: number): void {
 function pop(): QueueRequest | undefined {
   if (heap.length === 0) return undefined;
   const top = heap[0];
-  const last = heap.pop()!;
+  const last = heap.pop();
+  if (last === undefined) {
+    // heap.length > 0 was checked above — this indicates a bug
+    throw new Error('pop(): heap.pop() returned undefined despite heap.length > 0');
+  }
   if (heap.length > 0) {
     heap[0] = last;
     heapDown(0);
@@ -180,7 +204,7 @@ export function enqueue<T>(
 
       fn()
         .then((result) => { clearTimeout(execTimeout); queueEvents.emit('completed', { id, label }); resolve(result); })
-        .catch((err: unknown) => { clearTimeout(execTimeout); queueEvents.emit('failed', { id, label, error: err }); reject(err); })
+        .catch((err: unknown) => { clearTimeout(execTimeout); queueEvents.emit('failed', { id, label, error: err }); reject(err instanceof Error ? err : new Error(String(err))); })
         .finally(() => { active--; drain(); });
     });
   }

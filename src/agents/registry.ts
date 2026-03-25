@@ -137,10 +137,11 @@ export async function dispatch(
     'SELECT id, is_active FROM agents WHERE slug = $1',
     [targetSlug]
   );
-  if (agentCheck.rows.length === 0) {
+  const agentRow = agentCheck.rows[0];
+  if (!agentRow) {
     throw new Error(`Agent '${targetSlug}' not found in DB. Did you run seed.sql?`);
   }
-  if (!agentCheck.rows[0]!.is_active) {
+  if (!agentRow.is_active) {
     throw new Error(`Agent '${targetSlug}' exists but is_active = false. Enable it first.`);
   }
 
@@ -167,7 +168,7 @@ export async function dispatch(
     3
   );
 
-  console.log(
+  console.error(
     `[registry] Dispatched "${title}" → ${targetSlug} (sub-task ${subTask.id})`
   );
 
