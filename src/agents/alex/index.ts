@@ -114,6 +114,21 @@ let USER:  string | null = null;
  */
 let AGENT: string | null = null;
 
+// ---------------------------------------------------------------------------
+// Module-level initialisation — load all three identity documents immediately
+// on import, not only when runAlex() is called.
+//
+// This is the critical fix: when the API container dynamically imports
+// respondToChat(), the module is loaded fresh in the API process.
+// runAlex() is never called in that process, so any initialisation that
+// lives inside runAlex() never runs — leaving SOUL/AGENT/USER as null.
+//
+// Moving the synchronous reads to module scope ensures the documents are
+// always present regardless of which process imports this module.
+// The synchronous readFileSync calls are intentional (< 1ms on local SSD)
+// and match the contract documented on each loadX() function.
+// ---------------------------------------------------------------------------
+
 /**
  * Read SOUL.md synchronously from disk and return its text.
  *
@@ -173,6 +188,12 @@ function loadAgent(): string | null {
   }
 }
 
+// Module-level initialisation — runs on import, not only when runAlex() is called.
+// This ensures SOUL/AGENT/USER are populated when the API process imports respondToChat().
+SOUL  = loadSoul();
+USER  = loadUser();
+AGENT = loadAgent();
+
 /** How often Alex wakes up to poll, check delegations, and consolidate memory. */
 const HEARTBEAT_INTERVAL_MS = 60_000; // 1 minute
 
@@ -231,10 +252,6 @@ export async function runAlex(): Promise<void> {
   // identity document). Importance=4 for the successful load (higher than normal
   // observations — this is a session boundary event).
   // ---------------------------------------------------------------------------
-  SOUL  = loadSoul();
-  USER  = loadUser();
-  AGENT = loadAgent();
-
   try {
     if (SOUL) {
       await writeUnifiedMemory(
