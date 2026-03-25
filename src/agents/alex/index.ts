@@ -69,8 +69,9 @@ import {
  * so `join(__dirname, 'SOUL.md')` resolves correctly in both dev and prod.
  */
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const SOUL_PATH = join(__dirname, 'SOUL.md');
-const USER_PATH = join(__dirname, 'USER.md');
+const SOUL_PATH  = join(__dirname, 'SOUL.md');
+const USER_PATH  = join(__dirname, 'USER.md');
+const AGENT_PATH = join(__dirname, 'AGENT.md');
 
 /**
  * Alex's identity document, loaded once at module initialisation.
@@ -100,7 +101,18 @@ let SOUL: string | null = null;
  * Like Soul.md: read in full, never chunked, never RAG'd. A missing USER.md
  * is logged but not fatal — Alex continues with Soul.md alone.
  */
-let USER: string | null = null;
+let USER:  string | null = null;
+
+/**
+ * Alex's operational profile — his role, responsibilities, and self-awareness.
+ *
+ * AGENT.md sits alongside Soul.md and User.md in the startup identity stack.
+ * Where Soul.md defines values and User.md defines who Alex serves, AGENT.md
+ * defines how Alex actually operates: his role, what he's responsible for,
+ * his constraints, and what he genuinely cares about. Together the three
+ * documents give Alex a complete identity before any task or conversation runs.
+ */
+let AGENT: string | null = null;
 
 /**
  * Read SOUL.md synchronously from disk and return its text.
@@ -140,6 +152,23 @@ function loadUser(): string | null {
     return text;
   } catch (err) {
     console.error(`[Alex] WARNING: Could not read User.md at ${USER_PATH}:`, err instanceof Error ? err.message : String(err));
+    return null;
+  }
+}
+
+/**
+ * Read AGENT.md synchronously from disk and return its text.
+ * Same contract as loadSoul() and loadUser() — synchronous, non-fatal on failure.
+ *
+ * @returns The full text of AGENT.md, or null if the file cannot be read.
+ */
+function loadAgent(): string | null {
+  try {
+    const text = readFileSync(AGENT_PATH, 'utf-8');
+    console.error(`[Alex] Agent.md loaded (${text.length} chars) from ${AGENT_PATH}`);
+    return text;
+  } catch (err) {
+    console.error(`[Alex] WARNING: Could not read Agent.md at ${AGENT_PATH}:`, err instanceof Error ? err.message : String(err));
     return null;
   }
 }
@@ -202,8 +231,9 @@ export async function runAlex(): Promise<void> {
   // identity document). Importance=4 for the successful load (higher than normal
   // observations — this is a session boundary event).
   // ---------------------------------------------------------------------------
-  SOUL = loadSoul();
-  USER = loadUser();
+  SOUL  = loadSoul();
+  USER  = loadUser();
+  AGENT = loadAgent();
 
   try {
     if (SOUL) {
@@ -267,6 +297,35 @@ export async function runAlex(): Promise<void> {
     }
   } catch (err) {
     console.error('[Alex] Failed to write User.md to unified memory:', err);
+  }
+
+  // Load AGENT.md — Alex's operational profile and self-awareness.
+  try {
+    if (AGENT) {
+      await writeUnifiedMemory(
+        'alex',
+        'observation',
+        'Alex Agent.md loaded — operational profile established',
+        {
+          agent_path: AGENT_PATH,
+          agent_length_chars: AGENT.length,
+          loaded_at: new Date().toISOString(),
+          agent_text: AGENT,
+        },
+        4
+      );
+      console.error('[Alex] Agent.md written to unified memory');
+    } else {
+      await writeUnifiedMemory(
+        'alex',
+        'observation',
+        'WARNING: Alex Agent.md could not be loaded — operating without agent profile',
+        { agent_path: AGENT_PATH, error: 'File not found or unreadable' },
+        4
+      );
+    }
+  } catch (err) {
+    console.error('[Alex] Failed to write Agent.md to unified memory:', err);
   }
 
   // ---------------------------------------------------------------------------
@@ -455,9 +514,10 @@ async function orchestrateTask(task: {
     // This ensures his identity and values govern every direct response, not
     // just his orchestration behaviour. If Soul.md is unavailable, fall back
     // to the minimal identity string — never send a prompt with no identity.
-    const userContext = USER ? `\n\n---\n\n${USER}` : '';
+    const userContext  = USER  ? `\n\n---\n\n${USER}`  : '';
+    const agentContext = AGENT ? `\n\n---\n\n${AGENT}` : '';
     const systemPrompt = SOUL
-      ? `${SOUL}${userContext}\n\n---\n\nYou are Alex, an AI chief-of-staff. Be concise and actionable.`
+      ? `${SOUL}${userContext}${agentContext}\n\n---\n\nYou are Alex, an AI chief-of-staff. Be concise and actionable.`
       : 'You are Alex, an AI chief-of-staff. Be concise and actionable.';
 
     const reply = await prompt(
@@ -977,9 +1037,10 @@ export async function respondToChat(
   // Step 5: Build the message array for the LLM.
   // Soul.md is already loaded in the SOUL module variable at startup.
   // Inject it as the system prompt so Alex's identity governs every response.
-  const userContext = USER ? `\n\n---\n\n${USER}` : '';
+  const userContext  = USER  ? `\n\n---\n\n${USER}`  : '';
+  const agentContext = AGENT ? `\n\n---\n\n${AGENT}` : '';
   const systemPrompt = SOUL
-    ? `${SOUL}${userContext}\n\n---\n\nYou are Alex. You are having a direct conversation with Dave. Be yourself — thoughtful, precise, honest. This is not a task. This is a conversation.${memoryContext ? `\n\nRelevant context from memory:\n${memoryContext}` : ''}`
+    ? `${SOUL}${userContext}${agentContext}\n\n---\n\nYou are Alex. You are having a direct conversation with Dave. Be yourself — thoughtful, precise, honest. This is not a task. This is a conversation.${memoryContext ? `\n\nRelevant context from memory:\n${memoryContext}` : ''}`
     : `You are Alex, chief of staff for TrustCore Systems. Be direct and thoughtful.${memoryContext ? `\n\nRelevant context from memory:\n${memoryContext}` : ''}`;
 
   // Build conversation history as LLM messages.
