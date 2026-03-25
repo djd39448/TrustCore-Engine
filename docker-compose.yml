@@ -204,6 +204,7 @@ services:
       OLLAMA_HOST: http://ollama-gpu1:11434
       OLLAMA_HOST_GPU0: http://ollama-gpu0:11434
       API_PORT: "3003"
+      LLM_MODEL: "qwen2.5:14b"
     ports:
       - "3003:3003"
     depends_on:
