@@ -28,7 +28,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { pool, query } from '../../db/client.js';
 import { writeUnifiedMemory, updateTask, resolveAgentId, searchKnowledgeBase, readUnifiedMemory } from '../../mcp/tools.js';
-import { classifyTaskIntent, prompt } from '../../llm/client.js';
+import { classifyTaskIntent, prompt, chat, type ChatMessage, LLM_MODEL } from '../../llm/client.js';
 import { dispatch } from '../registry.js';
 import type { EvalResult } from '../eval/index.js';
 
@@ -840,6 +840,126 @@ In 2-3 sentences, write strategic notes for the sub-agent: what context is most 
       context_sources: contextSources,
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Chat — Alex's direct conversational response function
+// ---------------------------------------------------------------------------
+
+/**
+ * respondToChat — Alex's direct conversational response function.
+ *
+ * This is NOT the task pipeline. Chat is a direct conversation between
+ * the user and Alex. No sub-agent delegation, no eval scoring, no task
+ * queue. Alex reads the full conversation context, pulls relevant memories,
+ * and responds directly using his LLM with Soul.md governing the voice.
+ *
+ * @param sessionId - UUID of the chat session (from chat_sessions table)
+ * @param userMessage - The raw text the user just sent
+ * @returns Alex's response text, or null if the LLM is unavailable
+ */
+export async function respondToChat(
+  sessionId: string,
+  userMessage: string
+): Promise<string | null> {
+
+  // Step 1: Write the user message to chat_messages immediately so it
+  // is persisted before we attempt the LLM call. If the LLM fails,
+  // the user's message is still recorded.
+  await query(
+    `INSERT INTO chat_messages (session_id, role, content)
+     VALUES ($1, 'user', $2)`,
+    [sessionId, userMessage]
+  );
+
+  // Step 2: Auto-generate session title from the first message.
+  // Truncate to 60 chars. Only updates if title is still the default.
+  await query(
+    `UPDATE chat_sessions
+     SET title = LEFT($2, 60), updated_at = NOW()
+     WHERE id = $1 AND title = 'New conversation'`,
+    [sessionId, userMessage]
+  );
+
+  // Always update updated_at so sidebar ordering stays current.
+  await query(
+    `UPDATE chat_sessions SET updated_at = NOW() WHERE id = $1`,
+    [sessionId]
+  );
+
+  // Step 3: Load the last 20 messages from this session for conversation
+  // context. 20 messages is enough for coherent multi-turn conversation
+  // without exceeding Alex's 4096-token context window.
+  const historyResult = await query<{ role: string; content: string }>(
+    `SELECT role, content FROM chat_messages
+     WHERE session_id = $1
+     ORDER BY created_at ASC
+     LIMIT 20`,
+    [sessionId]
+  );
+  const history = historyResult.rows;
+
+  // Step 4: Pull relevant memories from unified_memory using semantic
+  // search on the user's message. Limit to 3 — enough for context
+  // without flooding the prompt. Exclude heartbeat and consolidation noise.
+  const memories = await readUnifiedMemory(userMessage, {
+    limit: 3,
+    min_importance: 2,
+  });
+  const memoryContext = memories.length > 0
+    ? memories.map((m) => `- ${m.summary}`).join('\n')
+    : null;
+
+  // Step 5: Build the message array for the LLM.
+  // Soul.md is already loaded in the SOUL module variable at startup.
+  // Inject it as the system prompt so Alex's identity governs every response.
+  const systemPrompt = SOUL
+    ? `${SOUL}\n\n---\n\nYou are Alex. You are having a direct conversation with Dave. Be yourself — thoughtful, precise, honest. This is not a task. This is a conversation.${memoryContext ? `\n\nRelevant context from memory:\n${memoryContext}` : ''}`
+    : `You are Alex, chief of staff for TrustCore Systems. Be direct and thoughtful.${memoryContext ? `\n\nRelevant context from memory:\n${memoryContext}` : ''}`;
+
+  // Build conversation history as LLM messages.
+  // Map 'alex' role to 'assistant' for the LLM API.
+  const messages: ChatMessage[] = [
+    { role: 'system', content: systemPrompt },
+    ...history.map((h) => ({
+      role: h.role === 'alex' ? 'assistant' as const : 'user' as const,
+      content: h.content,
+    })),
+  ];
+
+  // Step 6: Call the LLM. Priority 1 — this is Alex routing/responding.
+  const response = await chat(messages, LLM_MODEL, 1, `chat:${sessionId}`);
+
+  if (!response) {
+    // LLM unavailable — write a graceful fallback so the conversation
+    // record is complete even when Ollama is down.
+    const fallback = "I'm having trouble connecting to my language model right now. Please try again in a moment.";
+    await query(
+      `INSERT INTO chat_messages (session_id, role, content)
+       VALUES ($1, 'alex', $2)`,
+      [sessionId, fallback]
+    );
+    return fallback;
+  }
+
+  // Step 7: Write Alex's response to chat_messages.
+  await query(
+    `INSERT INTO chat_messages (session_id, role, content)
+     VALUES ($1, 'alex', $2)`,
+    [sessionId, response]
+  );
+
+  // Step 8: Write an observation to unified_memory so this conversation
+  // appears in the memory feed and is searchable in future sessions.
+  await writeUnifiedMemory(
+    'alex',
+    'user_interaction',
+    `Chat: ${userMessage.slice(0, 100)}`,
+    { session_id: sessionId, user_message: userMessage, response_preview: response.slice(0, 200) },
+    3
+  );
+
+  return response;
 }
 
 // ---------------------------------------------------------------------------

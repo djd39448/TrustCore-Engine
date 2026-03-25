@@ -8,14 +8,16 @@ import MemoryFeed from '@/components/MemoryFeed';
 import MemoryView from '@/components/MemoryView';
 import AgentsView from '@/components/AgentsView';
 import OfficeView from '@/components/OfficeView';
+import ChatPanel from '@/components/ChatPanel';
 import { fetcher, WS_URL } from '@/lib/api';
 import type { WsMessage } from '@/lib/types';
 import styles from './page.module.css';
 
-type Tab = 'tasks' | 'memories' | 'team' | 'calendar' | 'projects' | 'docs' | 'office';
+type Tab = 'tasks' | 'chat' | 'memories' | 'team' | 'calendar' | 'projects' | 'docs' | 'office';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'tasks', label: 'Tasks' },
+  { id: 'chat', label: 'Chat' },
   { id: 'memories', label: 'Memories' },
   { id: 'team', label: 'Team' },
   { id: 'calendar', label: 'Calendar' },
@@ -110,6 +112,7 @@ export default function Home() {
   function renderMain() {
     switch (activeTab) {
       case 'tasks': return <TaskBoard liveTaskIds={liveTaskIds} />;
+      case 'chat': return <ChatPanel />;
       case 'memories': return <MemoryView />;
       case 'team': return <AgentsView />;
       case 'calendar': return <PlaceholderView name="Calendar" />;

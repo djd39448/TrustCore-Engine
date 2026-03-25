@@ -612,6 +612,86 @@ export function startApiServer(): void {
     res.json({ taskId, status: 'pending', result: null, timeout: true });
   });
 
+  // --- Chat sessions: create ---
+  // POST /api/chat/sessions — creates a new empty chat session.
+  // Returns the new session id. The dashboard calls this when the user
+  // clicks "New Chat" to get a session UUID before the first message is sent.
+  app.post('/api/chat/sessions', async (_req: Request, res: Response) => {
+    const result = await query<{ id: string }>(
+      `INSERT INTO chat_sessions DEFAULT VALUES RETURNING id`
+    );
+    res.status(201).json({ id: result.rows[0]!.id });
+  });
+
+  // --- Chat sessions: list ---
+  // GET /api/chat/sessions — returns all sessions ordered by most recently
+  // updated. Used to populate the left sidebar with the session history list.
+  // Capped at 50 to keep the payload small; older sessions accessible via
+  // direct DB access if ever needed.
+  app.get('/api/chat/sessions', async (_req: Request, res: Response) => {
+    const result = await query(
+      `SELECT id, title, created_at, updated_at
+       FROM chat_sessions
+       ORDER BY updated_at DESC
+       LIMIT 50`
+    );
+    res.json(result.rows);
+  });
+
+  // --- Chat messages: load session history ---
+  // GET /api/chat/sessions/:id/messages — returns all messages in a session
+  // ordered chronologically (oldest first). Used when the user clicks a
+  // previous session in the sidebar to reload the full conversation thread.
+  app.get('/api/chat/sessions/:id/messages', async (req: Request, res: Response) => {
+    const { id } = req.params as { id: string };
+    const result = await query(
+      `SELECT id, role, content, created_at
+       FROM chat_messages
+       WHERE session_id = $1
+       ORDER BY created_at ASC`,
+      [id]
+    );
+    res.json(result.rows);
+  });
+
+  // --- Chat message: send and receive ---
+  // POST /api/chat/message — the main chat endpoint.
+  // Receives a session_id and message text, calls Alex's respondToChat()
+  // which handles all DB persistence and LLM interaction, and returns
+  // Alex's response. This replaces the old POST /api/chat task-queue approach
+  // with a direct conversational flow backed by the chat_messages table.
+  app.post('/api/chat/message', async (req: Request, res: Response) => {
+    const { session_id, message } = req.body as {
+      session_id?: string;
+      message?: string;
+    };
+
+    if (!session_id || !message?.trim()) {
+      res.status(400).json({ error: 'session_id and message are required' });
+      return;
+    }
+
+    // Verify session exists — reject orphaned messages early so the DB
+    // foreign key constraint never fires as the user's error experience.
+    const sessionCheck = await query<{ id: string }>(
+      `SELECT id FROM chat_sessions WHERE id = $1`,
+      [session_id]
+    );
+    if (sessionCheck.rows.length === 0) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    // Import respondToChat from Alex — it handles all LLM and DB operations
+    const { respondToChat } = await import('../agents/alex/index.js');
+    const response = await respondToChat(session_id, message.trim());
+
+    res.json({
+      response,
+      session_id,
+    });
+  });
+
   // --- Eval scores (filter by task_id, agent, outcome, limit) ---
   app.get('/api/eval/scores', async (req: Request, res: Response) => {
     const { task_id, agent, outcome, limit = '50' } = req.query as Record<string, string>;
