@@ -440,6 +440,21 @@ export async function createTask(
 }
 
 // ---------------------------------------------------------------------------
+// touch_agent_last_seen
+// ---------------------------------------------------------------------------
+
+/**
+ * Update an agent's last_seen timestamp. Called on every heartbeat tick.
+ * Replaces unified_memory heartbeat writes — single UPDATE, no memory entry.
+ */
+export async function touchAgentLastSeen(agentSlug: string): Promise<void> {
+  await query(
+    `UPDATE agents SET last_seen = NOW() WHERE slug = $1`,
+    [agentSlug]
+  );
+}
+
+// ---------------------------------------------------------------------------
 // update_task
 // ---------------------------------------------------------------------------
 

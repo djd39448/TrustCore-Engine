@@ -27,7 +27,7 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { pool, query } from '../../db/client.js';
-import { writeUnifiedMemory, updateTask, resolveAgentId, searchKnowledgeBase, readUnifiedMemory } from '../../mcp/tools.js';
+import { writeUnifiedMemory, updateTask, resolveAgentId, searchKnowledgeBase, readUnifiedMemory, touchAgentLastSeen } from '../../mcp/tools.js';
 import { classifyTaskIntent, prompt } from '../../llm/client.js';
 import { dispatch } from '../registry.js';
 import type { EvalResult } from '../eval/index.js';
@@ -226,16 +226,31 @@ export async function runAlex(): Promise<void> {
   // Run one heartbeat immediately, then schedule recurring
   await heartbeat();
 
+  // Open a dedicated pg client for LISTEN so the main pool stays available.
+  // When the API inserts a task or a sub-agent completes one, pg_notify fires
+  // and we dispatch/check immediately without waiting up to 60s.
+  const pgClient = await pool.connect();
+  await pgClient.query('LISTEN task_ready');
+  pgClient.on('notification', () => {
+    pollPendingTasks().catch((err: unknown) => {
+      console.error('[Alex] pollPendingTasks (NOTIFY) error:', err);
+    });
+    checkCompletedDelegations().catch((err: unknown) => {
+      console.error('[Alex] checkCompletedDelegations (NOTIFY) error:', err);
+    });
+  });
+
   const interval = setInterval(() => {
     heartbeat().catch((err: unknown) => {
       console.error('[Alex] Heartbeat error:', err);
     });
   }, HEARTBEAT_INTERVAL_MS);
 
-  // Graceful shutdown
+  // Graceful shutdown — writes a final memory entry, releases pg client, drains pool
   process.on('SIGINT', () => {
     console.error('\n[Alex] Shutting down...');
     clearInterval(interval);
+    pgClient.release();
     writeUnifiedMemory(
       'alex',
       'observation',
@@ -249,6 +264,21 @@ export async function runAlex(): Promise<void> {
         console.error('[Alex] Error during shutdown:', err);
         process.exit(1);
       });
+  });
+
+  // Release pg client on unhandled errors so the connection is not leaked
+  process.on('uncaughtException', (err: Error) => {
+    console.error('[Alex] Uncaught exception:', err);
+    clearInterval(interval);
+    pgClient.release();
+    pool.end().catch(() => {}).finally(() => process.exit(1));
+  });
+
+  process.on('unhandledRejection', (reason: unknown) => {
+    console.error('[Alex] Unhandled rejection:', reason);
+    clearInterval(interval);
+    pgClient.release();
+    pool.end().catch(() => {}).finally(() => process.exit(1));
   });
 }
 
@@ -267,15 +297,9 @@ async function heartbeat(): Promise<void> {
   console.error(`[Alex] Heartbeat at ${ts}`);
 
   try {
-    await writeUnifiedMemory(
-      'alex',
-      'heartbeat',
-      `Alex heartbeat — system alive at ${ts}`,
-      { ts, agent: 'alex' },
-      1
-    );
+    await touchAgentLastSeen('alex');
   } catch (err) {
-    console.error('[Alex] Failed to write heartbeat to unified_memory:', err);
+    console.error('[Alex] Failed to update last_seen:', err);
   }
 
   await pollPendingTasks();

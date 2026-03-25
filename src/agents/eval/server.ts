@@ -17,10 +17,9 @@
 
 import express from 'express';
 import { evaluate, type EvalInput } from './index.js';
-import { writeUnifiedMemory, writeOwnMemory } from '../../mcp/tools.js';
+import { writeUnifiedMemory, writeOwnMemory, touchAgentLastSeen } from '../../mcp/tools.js';
 
 const PORT = parseInt(process.env['EVAL_PORT'] ?? '3005');
-const HEARTBEAT_INTERVAL_MS = 60_000;
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -94,32 +93,17 @@ app.post('/eval', async (req, res) => {
   }
 });
 
-// Fix 3 — heartbeat so eval shows as alive in the Team sidebar
-async function sendHeartbeat(): Promise<void> {
-  const ts = new Date().toISOString();
-  try {
-    await writeUnifiedMemory(
-      'eval',
-      'heartbeat',
-      `Eval agent heartbeat — system alive at ${ts}`,
-      { ts, agent: 'eval' },
-      1
-    );
-    console.log(`[Eval Server] Heartbeat at ${ts}`);
-  } catch (err) {
-    console.error('[Eval Server] Heartbeat failed:', err instanceof Error ? err.message : String(err));
-  }
-}
+app.listen(PORT, () => {
+  console.error(`[Eval Server] Listening on :${PORT}`);
+  console.error(`[Eval Server] OLLAMA_HOST=${process.env['OLLAMA_HOST'] ?? 'localhost:11434'}`);
 
-app.listen(PORT, async () => {
-  console.log(`[Eval Server] Listening on :${PORT}`);
-  console.log(`[Eval Server] OLLAMA_HOST=${process.env['OLLAMA_HOST'] ?? 'localhost:11434'}`);
-
-  // Send first heartbeat immediately, then every 60s
-  await sendHeartbeat();
+  // Touch last_seen immediately and every 60s — replaces unified_memory heartbeat writes
+  touchAgentLastSeen('eval').catch((err: unknown) => {
+    console.error('[Eval Server] Failed to update last_seen:', err instanceof Error ? err.message : String(err));
+  });
   setInterval(() => {
-    sendHeartbeat().catch((err: unknown) => {
-      console.error('[Eval Server] Heartbeat interval error:', err instanceof Error ? err.message : String(err));
+    touchAgentLastSeen('eval').catch((err: unknown) => {
+      console.error('[Eval Server] Failed to update last_seen:', err instanceof Error ? err.message : String(err));
     });
-  }, HEARTBEAT_INTERVAL_MS);
+  }, 60_000);
 });

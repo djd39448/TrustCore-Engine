@@ -15,6 +15,7 @@ import {
   logToolCall,
   updateTask,
   resolveAgentId,
+  touchAgentLastSeen,
   type UnifiedEventType,
   type AgentMemoryType,
 } from '../../mcp/tools.js';
@@ -48,7 +49,7 @@ export abstract class SubAgent {
   // ---------------------------------------------------------------------------
 
   async start(): Promise<void> {
-    console.log(`[${this.displayName}] Starting up...`);
+    console.error(`[${this.displayName}] Starting up...`);
 
     await this.log('observation', `${this.displayName} agent started`, {
       message: `${this.slug} initialized at ${new Date().toISOString()}`,
@@ -56,19 +57,24 @@ export abstract class SubAgent {
 
     await this.pollTasks();
 
-    this.intervalHandle = setInterval(async () => {
-      try {
-        await this.pollTasks();
-      } catch (err) {
+    this.intervalHandle = setInterval(() => {
+      this.pollTasks().catch((err: unknown) => {
         console.error(`[${this.displayName}] Poll error:`, err);
-      }
+      });
+      touchAgentLastSeen(this.slug).catch((err: unknown) => {
+        console.error(`[${this.displayName}] last_seen update failed:`, err);
+      });
     }, this.pollIntervalMs);
 
-    process.on('SIGINT', () => this.shutdown());
+    process.on('SIGINT', () => {
+      this.shutdown().catch((err: unknown) => {
+        console.error(`[${this.displayName}] Shutdown error:`, err);
+      });
+    });
   }
 
   private async shutdown(): Promise<void> {
-    console.log(`\n[${this.displayName}] Shutting down...`);
+    console.error(`\n[${this.displayName}] Shutting down...`);
     if (this.intervalHandle) clearInterval(this.intervalHandle);
     await this.log('observation', `${this.displayName} agent stopped`, {
       message: `${this.slug} shut down at ${new Date().toISOString()}`,
@@ -93,7 +99,7 @@ export abstract class SubAgent {
     );
 
     if (result.rows.length === 0) return;
-    console.log(`[${this.displayName}] ${result.rows.length} pending task(s)`);
+    console.error(`[${this.displayName}] ${result.rows.length} pending task(s)`);
 
     for (const task of result.rows) {
       await this.processTask(task);
@@ -101,7 +107,7 @@ export abstract class SubAgent {
   }
 
   private async processTask(task: TaskRecord): Promise<void> {
-    console.log(`[${this.displayName}] Processing: ${task.title}`);
+    console.error(`[${this.displayName}] Processing: ${task.title}`);
 
     await updateTask(task.id, 'in_progress');
     await this.log('task_started', `${this.displayName} started: ${task.title}`, {
@@ -127,6 +133,10 @@ export abstract class SubAgent {
       await this.log('task_completed', `${this.displayName} completed: ${task.title}`, {
         task_id: task.id,
         result,
+      });
+      // Notify Alex immediately that a sub-task completed — triggers delegation check
+      query(`SELECT pg_notify('task_ready', $1)`, [task.id]).catch((err: unknown) => {
+        console.error(`[${this.displayName}] pg_notify failed:`, err);
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -156,7 +166,7 @@ export abstract class SubAgent {
    * machine-readable so Alex's guard can query for it if needed in future.
    */
   private async logIdle(taskId: string): Promise<void> {
-    console.log(`[${this.displayName}] Task complete — returning to idle`);
+    console.error(`[${this.displayName}] Task complete — returning to idle`);
     await this.log(
       'observation',
       `[${this.slug}] Task complete — returning to idle`,

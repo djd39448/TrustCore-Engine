@@ -102,10 +102,7 @@ export function startApiServer(): void {
   app.get('/api/agents', async (_req: Request, res: Response) => {
     const result = await query(
       `SELECT a.id, a.slug, a.display_name, a.type, a.description, a.is_active, a.created_at,
-              (SELECT um.created_at
-               FROM unified_memory um
-               WHERE um.author_agent_id = a.id AND um.event_type = 'heartbeat'
-               ORDER BY um.created_at DESC LIMIT 1) AS last_heartbeat
+              a.last_seen
        FROM agents a ORDER BY a.created_at ASC`
     );
     res.json(result.rows);
@@ -192,6 +189,10 @@ export function startApiServer(): void {
     }
     const taskId = taskRow.id;
     broadcast('task_created', { id: taskId, title, assigned_to, status: 'pending' });
+    // Notify Alex immediately — don't wait for his 60s poll
+    query(`SELECT pg_notify('task_ready', $1)`, [taskId]).catch((err: unknown) => {
+      console.error('[API] pg_notify failed:', err);
+    });
     res.status(201).json({ id: taskId });
   });
 
@@ -488,18 +489,16 @@ export function startApiServer(): void {
     res.json(getQueueStatus());
   });
 
-  // --- Heartbeat (last Alex heartbeat from unified_memory) ---
+  // --- Heartbeat (Alex last_seen from agents table) ---
   app.get('/api/heartbeat', async (_req: Request, res: Response) => {
     const result = await query(
-      `SELECT um.created_at, a.slug as agent_slug
-       FROM unified_memory um
-       JOIN agents a ON a.id = um.author_agent_id
-       WHERE um.event_type = 'heartbeat'
-       ORDER BY um.created_at DESC
-       LIMIT 1`
+      `SELECT slug, last_seen FROM agents WHERE slug = 'alex' LIMIT 1`
     );
-    const row = result.rows[0] as { created_at: string; agent_slug: string } | undefined;
-    res.json(row ? { last_heartbeat: row.created_at, agent: row.agent_slug } : { last_heartbeat: null, agent: null });
+    const row = result.rows[0] as { slug: string; last_seen: string | null } | undefined;
+    res.json(row?.last_seen
+      ? { last_heartbeat: row.last_seen, agent: row.slug }
+      : { last_heartbeat: null, agent: null }
+    );
   });
 
   // --- System stats ---
@@ -540,7 +539,7 @@ export function startApiServer(): void {
       // Last heartbeat + avg task duration
       query<{ last_heartbeat: Date; avg_duration_s: string | null }>(`
         SELECT
-          (SELECT MAX(created_at) FROM unified_memory WHERE event_type = 'heartbeat') AS last_heartbeat,
+          (SELECT MAX(last_seen) FROM agents WHERE slug != 'system') AS last_heartbeat,
           (SELECT AVG(EXTRACT(EPOCH FROM (completed_at - started_at)))
            FROM tasks WHERE status = 'completed' AND started_at IS NOT NULL AND completed_at IS NOT NULL) AS avg_duration_s`),
     ]);
@@ -587,6 +586,10 @@ export function startApiServer(): void {
     }
     const taskId = chatTaskRow.id;
     broadcast('task_created', { id: taskId, title: message.trim(), status: 'pending' });
+    // Notify Alex immediately
+    query(`SELECT pg_notify('task_ready', $1)`, [taskId]).catch((err: unknown) => {
+      console.error('[API] pg_notify failed:', err);
+    });
 
     // Poll for up to 90s (every 1.5s = 60 polls)
     const POLL_INTERVAL = 1500;
