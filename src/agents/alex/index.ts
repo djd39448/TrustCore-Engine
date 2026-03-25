@@ -70,6 +70,7 @@ import {
  */
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SOUL_PATH = join(__dirname, 'SOUL.md');
+const USER_PATH = join(__dirname, 'USER.md');
 
 /**
  * Alex's identity document, loaded once at module initialisation.
@@ -86,6 +87,20 @@ const SOUL_PATH = join(__dirname, 'SOUL.md');
  * logged as a high-importance event so it cannot be silently ignored.
  */
 let SOUL: string | null = null;
+
+/**
+ * The principal's profile — who Alex serves.
+ *
+ * USER.md describes Dave: who he is, what he is building, how he thinks,
+ * what he needs, and the people who matter to him. It is loaded at startup
+ * alongside Soul.md and injected into every system prompt so that Alex's
+ * responses are always grounded in the specific context of who he serves —
+ * not a generic principal, but this person, this family, this mission.
+ *
+ * Like Soul.md: read in full, never chunked, never RAG'd. A missing USER.md
+ * is logged but not fatal — Alex continues with Soul.md alone.
+ */
+let USER: string | null = null;
 
 /**
  * Read SOUL.md synchronously from disk and return its text.
@@ -108,6 +123,23 @@ function loadSoul(): string | null {
     // state should never persist. The missing-soul event is written to
     // unified_memory at importance=5 so it surfaces immediately in dashboards.
     console.error(`[Alex] WARNING: Could not read Soul.md at ${SOUL_PATH}:`, err instanceof Error ? err.message : String(err));
+    return null;
+  }
+}
+
+/**
+ * Read USER.md synchronously from disk and return its text.
+ * Same contract as loadSoul() — synchronous, non-fatal on failure.
+ *
+ * @returns The full text of USER.md, or null if the file cannot be read.
+ */
+function loadUser(): string | null {
+  try {
+    const text = readFileSync(USER_PATH, 'utf-8');
+    console.error(`[Alex] User.md loaded (${text.length} chars) from ${USER_PATH}`);
+    return text;
+  } catch (err) {
+    console.error(`[Alex] WARNING: Could not read User.md at ${USER_PATH}:`, err instanceof Error ? err.message : String(err));
     return null;
   }
 }
@@ -171,6 +203,7 @@ export async function runAlex(): Promise<void> {
   // observations — this is a session boundary event).
   // ---------------------------------------------------------------------------
   SOUL = loadSoul();
+  USER = loadUser();
 
   try {
     if (SOUL) {
@@ -204,6 +237,36 @@ export async function runAlex(): Promise<void> {
     }
   } catch (err) {
     console.error('[Alex] Failed to write Soul.md to unified memory:', err);
+  }
+
+  // Load USER.md — who Alex serves. Written to unified_memory at startup
+  // so it's searchable and the activity feed confirms the profile is active.
+  try {
+    if (USER) {
+      await writeUnifiedMemory(
+        'alex',
+        'observation',
+        'Alex User.md loaded — principal profile established',
+        {
+          user_path: USER_PATH,
+          user_length_chars: USER.length,
+          loaded_at: new Date().toISOString(),
+          user_text: USER,
+        },
+        4
+      );
+      console.error('[Alex] User.md written to unified memory');
+    } else {
+      await writeUnifiedMemory(
+        'alex',
+        'observation',
+        'WARNING: Alex User.md could not be loaded — operating without principal profile',
+        { user_path: USER_PATH, error: 'File not found or unreadable' },
+        4
+      );
+    }
+  } catch (err) {
+    console.error('[Alex] Failed to write User.md to unified memory:', err);
   }
 
   // ---------------------------------------------------------------------------
@@ -392,8 +455,9 @@ async function orchestrateTask(task: {
     // This ensures his identity and values govern every direct response, not
     // just his orchestration behaviour. If Soul.md is unavailable, fall back
     // to the minimal identity string — never send a prompt with no identity.
+    const userContext = USER ? `\n\n---\n\n${USER}` : '';
     const systemPrompt = SOUL
-      ? `${SOUL}\n\n---\n\nYou are Alex, an AI chief-of-staff. Be concise and actionable.`
+      ? `${SOUL}${userContext}\n\n---\n\nYou are Alex, an AI chief-of-staff. Be concise and actionable.`
       : 'You are Alex, an AI chief-of-staff. Be concise and actionable.';
 
     const reply = await prompt(
@@ -913,8 +977,9 @@ export async function respondToChat(
   // Step 5: Build the message array for the LLM.
   // Soul.md is already loaded in the SOUL module variable at startup.
   // Inject it as the system prompt so Alex's identity governs every response.
+  const userContext = USER ? `\n\n---\n\n${USER}` : '';
   const systemPrompt = SOUL
-    ? `${SOUL}\n\n---\n\nYou are Alex. You are having a direct conversation with Dave. Be yourself — thoughtful, precise, honest. This is not a task. This is a conversation.${memoryContext ? `\n\nRelevant context from memory:\n${memoryContext}` : ''}`
+    ? `${SOUL}${userContext}\n\n---\n\nYou are Alex. You are having a direct conversation with Dave. Be yourself — thoughtful, precise, honest. This is not a task. This is a conversation.${memoryContext ? `\n\nRelevant context from memory:\n${memoryContext}` : ''}`
     : `You are Alex, chief of staff for TrustCore Systems. Be direct and thoughtful.${memoryContext ? `\n\nRelevant context from memory:\n${memoryContext}` : ''}`;
 
   // Build conversation history as LLM messages.
