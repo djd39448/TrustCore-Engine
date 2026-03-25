@@ -492,7 +492,7 @@ export function startApiServer(): void {
   // --- Heartbeat (Alex last_seen from agents table) ---
   app.get('/api/heartbeat', async (_req: Request, res: Response) => {
     const result = await query(
-      `SELECT slug, last_seen FROM agents WHERE slug = 'alex' LIMIT 1`
+      `SELECT slug, last_seen FROM agents WHERE slug = 'alex' ORDER BY last_seen DESC NULLS LAST LIMIT 1`
     );
     const row = result.rows[0] as { slug: string; last_seen: string | null } | undefined;
     res.json(row?.last_seen

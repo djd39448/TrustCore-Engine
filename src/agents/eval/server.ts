@@ -17,7 +17,8 @@
 
 import express from 'express';
 import { evaluate, type EvalInput } from './index.js';
-import { writeUnifiedMemory, writeOwnMemory, touchAgentLastSeen } from '../../mcp/tools.js';
+import { writeUnifiedMemory, writeOwnMemory } from '../../mcp/tools.js';
+import { query } from '../../db/client.js';
 
 const PORT = parseInt(process.env['EVAL_PORT'] ?? '3005');
 
@@ -93,17 +94,26 @@ app.post('/eval', async (req, res) => {
   }
 });
 
+async function sendHeartbeat(): Promise<void> {
+  const ts = new Date().toISOString();
+  try {
+    await query(`UPDATE agents SET last_seen = NOW() WHERE slug = 'eval'`);
+    console.error(`[Eval Server] Heartbeat at ${ts}`);
+  } catch (err) {
+    console.error('[Eval Server] Heartbeat failed:', err instanceof Error ? err.message : String(err));
+  }
+}
+
 app.listen(PORT, () => {
   console.error(`[Eval Server] Listening on :${PORT}`);
   console.error(`[Eval Server] OLLAMA_HOST=${process.env['OLLAMA_HOST'] ?? 'localhost:11434'}`);
 
-  // Touch last_seen immediately and every 60s — replaces unified_memory heartbeat writes
-  touchAgentLastSeen('eval').catch((err: unknown) => {
-    console.error('[Eval Server] Failed to update last_seen:', err instanceof Error ? err.message : String(err));
+  sendHeartbeat().catch((err: unknown) => {
+    console.error('[Eval Server] Initial heartbeat error:', err instanceof Error ? err.message : String(err));
   });
   setInterval(() => {
-    touchAgentLastSeen('eval').catch((err: unknown) => {
-      console.error('[Eval Server] Failed to update last_seen:', err instanceof Error ? err.message : String(err));
+    sendHeartbeat().catch((err: unknown) => {
+      console.error('[Eval Server] Heartbeat interval error:', err instanceof Error ? err.message : String(err));
     });
   }, 60_000);
 });

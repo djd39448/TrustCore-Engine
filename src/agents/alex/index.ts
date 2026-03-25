@@ -27,7 +27,7 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { pool, query } from '../../db/client.js';
-import { writeUnifiedMemory, updateTask, resolveAgentId, searchKnowledgeBase, readUnifiedMemory, touchAgentLastSeen } from '../../mcp/tools.js';
+import { writeUnifiedMemory, updateTask, resolveAgentId, searchKnowledgeBase, readUnifiedMemory } from '../../mcp/tools.js';
 import { classifyTaskIntent, prompt } from '../../llm/client.js';
 import { dispatch } from '../registry.js';
 import type { EvalResult } from '../eval/index.js';
@@ -297,7 +297,7 @@ async function heartbeat(): Promise<void> {
   console.error(`[Alex] Heartbeat at ${ts}`);
 
   try {
-    await touchAgentLastSeen('alex');
+    await query(`UPDATE agents SET last_seen = NOW() WHERE slug = 'alex'`);
   } catch (err) {
     console.error('[Alex] Failed to update last_seen:', err);
   }
