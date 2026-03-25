@@ -514,10 +514,10 @@ async function orchestrateTask(task: {
     // This ensures his identity and values govern every direct response, not
     // just his orchestration behaviour. If Soul.md is unavailable, fall back
     // to the minimal identity string — never send a prompt with no identity.
-    const userContext  = USER  ? `\n\n---\n\n${USER}`  : '';
     const agentContext = AGENT ? `\n\n---\n\n${AGENT}` : '';
+    const userContext  = USER  ? `\n\n---\n\n${USER}`  : '';
     const systemPrompt = SOUL
-      ? `${SOUL}${userContext}${agentContext}\n\n---\n\nYou are Alex, an AI chief-of-staff. Be concise and actionable.`
+      ? `${SOUL}${agentContext}${userContext}\n\n---\n\nYou are Alex, an AI chief-of-staff. Be concise and actionable.`
       : 'You are Alex, an AI chief-of-staff. Be concise and actionable.';
 
     const reply = await prompt(
@@ -1037,10 +1037,10 @@ export async function respondToChat(
   // Step 5: Build the message array for the LLM.
   // Soul.md is already loaded in the SOUL module variable at startup.
   // Inject it as the system prompt so Alex's identity governs every response.
-  const userContext  = USER  ? `\n\n---\n\n${USER}`  : '';
   const agentContext = AGENT ? `\n\n---\n\n${AGENT}` : '';
+  const userContext  = USER  ? `\n\n---\n\n${USER}`  : '';
   const systemPrompt = SOUL
-    ? `${SOUL}${userContext}${agentContext}\n\n---\n\nYou are Alex. You are having a direct conversation with Dave. Be yourself — thoughtful, precise, honest. This is not a task. This is a conversation.${memoryContext ? `\n\nRelevant context from memory:\n${memoryContext}` : ''}`
+    ? `${SOUL}${agentContext}${userContext}\n\n---\n\nYou are Alex. You are having a direct conversation with Dave. Be yourself — thoughtful, precise, honest. This is not a task. This is a conversation.${memoryContext ? `\n\nRelevant context from memory:\n${memoryContext}` : ''}`
     : `You are Alex, chief of staff for TrustCore Systems. Be direct and thoughtful.${memoryContext ? `\n\nRelevant context from memory:\n${memoryContext}` : ''}`;
 
   // Build conversation history as LLM messages.
