@@ -31,6 +31,8 @@ import { writeUnifiedMemory, updateTask, resolveAgentId, searchKnowledgeBase, re
 import { classifyTaskIntent, prompt, chat, type ChatMessage, LLM_MODEL } from '../../llm/client.js';
 import { dispatch } from '../registry.js';
 import type { EvalResult } from '../eval/index.js';
+import { store, load, summarize } from '@trustcore/memory-core';
+import { embed } from '../../embedding/client.js';
 
 /**
  * ASBCP (Agent Schema Based Communication Protocol) — @asbcp/core
@@ -193,6 +195,32 @@ function loadAgent(): string | null {
 SOUL  = loadSoul();
 USER  = loadUser();
 AGENT = loadAgent();
+
+// ---------------------------------------------------------------------------
+// MemoryCore adapters — module-scope singletons used by respondToChat().
+// ---------------------------------------------------------------------------
+
+/** Thin wrapper satisfying MemoryCore's DBClient interface using the shared pg pool. */
+const memoryDb = { query: (sql: string, params?: unknown[]) => pool.query(sql, params) };
+
+/**
+ * Thin wrapper satisfying MemoryCore's LLMClient interface using Alex's prompt().
+ * prompt() returns string|null; complete() must return string, so null maps to ''.
+ */
+const memoryLlm = { complete: (p: string): Promise<string> => prompt(p).then(r => r ?? '') };
+
+/** Alex's UUID, cached after the first DB lookup. Never re-resolved per-request. */
+let alexUuid: string | null = null;
+
+/**
+ * Returns Alex's agent UUID from the agents table, caching after the first call.
+ * Called once per chat turn; subsequent calls return the cached value synchronously
+ * after the first resolution.
+ */
+async function getAlexUuid(): Promise<string> {
+  if (!alexUuid) alexUuid = await resolveAgentId('alex');
+  return alexUuid;
+}
 
 /** How often Alex wakes up to poll, check delegations, and consolidate memory. */
 const HEARTBEAT_INTERVAL_MS = 60_000; // 1 minute
@@ -1028,17 +1056,16 @@ export async function respondToChat(
     [sessionId]
   );
 
-  // Step 3: Load the last 20 messages from this session for conversation
-  // context. 20 messages is enough for coherent multi-turn conversation
-  // without exceeding Alex's 4096-token context window.
-  const historyResult = await query<{ role: string; content: string }>(
-    `SELECT role, content FROM chat_messages
-     WHERE session_id = $1
-     ORDER BY created_at ASC
-     LIMIT 20`,
-    [sessionId]
-  );
-  const history = historyResult.rows;
+  // Step 3: Resolve Alex's UUID and load the MemoryCore summary chain for
+  // this session, oldest-to-newest, constrained to 40% of the 6000-token
+  // budget. Summaries give Alex structured long-term context without raw
+  // turn bloat.
+  const agentId = await getAlexUuid();
+  const summaries = await load(agentId, memoryDb, { sessionId, contextBudget: 6000 });
+  const historyMessages: ChatMessage[] = summaries.map(s => ({
+    role: 'system' as const,
+    content: `[Conversation summary: ${s.summaryText}]`,
+  }));
 
   // Step 4: Pull relevant memories from unified_memory using semantic
   // search on the user's message. Limit to 3 — enough for context
@@ -1061,13 +1088,10 @@ export async function respondToChat(
     : `You are Alex, chief of staff for TrustCore Systems. Be direct and thoughtful.${memoryContext ? `\n\nRelevant context from memory:\n${memoryContext}` : ''}`;
 
   // Build conversation history as LLM messages.
-  // Map 'alex' role to 'assistant' for the LLM API.
   const messages: ChatMessage[] = [
     { role: 'system', content: systemPrompt },
-    ...history.map((h) => ({
-      role: h.role === 'alex' ? 'assistant' as const : 'user' as const,
-      content: h.content,
-    })),
+    ...historyMessages,
+    { role: 'user', content: userMessage },
   ];
 
   // Step 6: Call the LLM. Priority 1 — this is Alex routing/responding.
@@ -1101,6 +1125,59 @@ export async function respondToChat(
     { session_id: sessionId, user_message: userMessage, response_preview: response.slice(0, 200) },
     3
   );
+
+  // Step 9: Store both turns in MemoryCore for long-term memory.
+  // Embeddings enable semantic search over this chunk. null embeddings
+  // (Ollama unavailable) are passed as undefined — the chunk is stored
+  // without a vector and remains accessible to all non-semantic queries.
+  const userEmbedding = await embed(userMessage);
+  void store(
+    { agentId, sessionId, content: userMessage, role: 'user' },
+    memoryDb,
+    memoryLlm,
+    userEmbedding ?? undefined
+  );
+  const alexEmbedding = await embed(response);
+  void store(
+    { agentId, sessionId, content: response, role: 'agent' },
+    memoryDb,
+    memoryLlm,
+    alexEmbedding ?? undefined
+  );
+
+  // Step 10: Check how many unsummarized chunks exist in this session since
+  // the most recent summary. At 10+ chunks (5 conversation turns), compress
+  // the most recent 10 into a new summary and append it to the chain.
+  const chunksSinceResult = await query<{ cnt: string }>(
+    `SELECT COUNT(*) as cnt FROM memory_chunks
+     WHERE agent_id = $1 AND session_id = $2
+     AND archived = false
+     AND created_at > COALESCE(
+       (SELECT MAX(created_at) FROM memory_summaries
+        WHERE agent_id = $1 AND session_id = $2),
+       '1970-01-01'
+     )`,
+    [agentId, sessionId]
+  );
+  const chunksSinceSummary = parseInt(
+    chunksSinceResult.rows[0]?.cnt ?? '0', 10
+  );
+  if (chunksSinceSummary >= 10) {
+    const recentHashes = await query<{ signpost_id: string }>(
+      `SELECT signpost_id FROM memory_chunks
+       WHERE agent_id = $1 AND session_id = $2
+       AND archived = false
+       ORDER BY created_at DESC LIMIT 10`,
+      [agentId, sessionId]
+    );
+    await summarize(
+      recentHashes.rows.map(r => r.signpost_id),
+      agentId,
+      sessionId,
+      memoryDb,
+      memoryLlm
+    );
+  }
 
   return response;
 }

@@ -1,7 +1,6 @@
 FROM node:20-slim
 
-# Step 1: Build MemoryCore so its dist/ exists for npm ci in Engine.
-# MemoryCore dist/ is not committed — it must be built here.
+# Step 1: Build MemoryCore
 WORKDIR /TrustCore-MemoryCore
 COPY TrustCore-MemoryCore/package.json TrustCore-MemoryCore/package-lock.json* ./
 RUN npm ci
@@ -9,7 +8,7 @@ COPY TrustCore-MemoryCore/src/ ./src/
 COPY TrustCore-MemoryCore/tsconfig.json ./
 RUN npm run build
 
-# Step 2: Build ASBCP TypeScript SDK so its dist/ exists for npm ci in Engine.
+# Step 2: Build ASBCP TypeScript SDK
 WORKDIR /TrustCore-ASBCP/ASBCP-Agent-Schema-Based-Communication-Protocol/sdk-typescript
 COPY TrustCore-ASBCP/ASBCP-Agent-Schema-Based-Communication-Protocol/sdk-typescript/package.json \
      TrustCore-ASBCP/ASBCP-Agent-Schema-Based-Communication-Protocol/sdk-typescript/package-lock.json* ./
@@ -18,8 +17,7 @@ COPY TrustCore-ASBCP/ASBCP-Agent-Schema-Based-Communication-Protocol/sdk-typescr
 COPY TrustCore-ASBCP/ASBCP-Agent-Schema-Based-Communication-Protocol/sdk-typescript/tsconfig.json ./
 RUN npm run build
 
-# Step 3: Build Engine. file: paths in package.json resolve to the built
-# sibling packages above.
+# Step 3: Build Engine
 WORKDIR /app
 COPY TrustCore-Engine/package.json TrustCore-Engine/package-lock.json* ./
 RUN npm ci --omit=dev

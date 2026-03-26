@@ -68,8 +68,8 @@ services:
 
   eval:
     build:
-      context: .
-      dockerfile: Dockerfile.agent
+      context: ../
+      dockerfile: TrustCore-Engine/Dockerfile.agent.extended
     container_name: trustcore-eval
     command: ["node", "--loader", "ts-node/esm", "src/agents/eval/server.ts"]
     env_file: .env
@@ -90,8 +90,8 @@ services:
 
   alex:
     build:
-      context: .
-      dockerfile: Dockerfile.agent
+      context: ../
+      dockerfile: TrustCore-Engine/Dockerfile.agent.extended
       args:
         AGENT_MODE: alex
     container_name: trustcore-alex
@@ -102,6 +102,7 @@ services:
       OLLAMA_HOST: http://ollama-gpu1:11434
       OLLAMA_HOST_GPU0: http://ollama-gpu0:11434
       LLM_MODEL: "qwen2.5:14b"
+      OLLAMA_NUM_CTX: "8192"
       EVAL_POLL_TIMEOUT_MS: "1800000"
       EVAL_SERVICE_URL: "http://trustcore-eval:3005"
     depends_on:
@@ -115,8 +116,8 @@ services:
 
   research:
     build:
-      context: .
-      dockerfile: Dockerfile.agent
+      context: ../
+      dockerfile: TrustCore-Engine/Dockerfile.agent.extended
       args:
         AGENT_MODE: research
     container_name: trustcore-research
@@ -135,8 +136,8 @@ services:
 
   mcp:
     build:
-      context: .
-      dockerfile: Dockerfile.agent
+      context: ../
+      dockerfile: TrustCore-Engine/Dockerfile.agent.extended
     container_name: trustcore-mcp
     command: ["node", "--loader", "ts-node/esm", "src/index.ts"]
     env_file: .env
@@ -155,8 +156,8 @@ services:
 
   email-writer:
     build:
-      context: .
-      dockerfile: Dockerfile.agent
+      context: ../
+      dockerfile: TrustCore-Engine/Dockerfile.agent.extended
       args:
         AGENT_MODE: email-writer
     container_name: trustcore-email-writer
@@ -175,8 +176,8 @@ services:
 
   resource-manager:
     build:
-      context: .
-      dockerfile: Dockerfile.agent
+      context: ../
+      dockerfile: TrustCore-Engine/Dockerfile.agent.extended
     container_name: trustcore-resource-manager
     command: ["node", "--loader", "ts-node/esm", "src/resource-manager/standalone.ts"]
     env_file: .env
@@ -194,8 +195,8 @@ services:
 
   api:
     build:
-      context: .
-      dockerfile: Dockerfile.agent
+      context: ../
+      dockerfile: TrustCore-Engine/Dockerfile.agent.extended
     container_name: trustcore-api
     command: ["node", "--loader", "ts-node/esm", "src/index.ts", "api"]
     env_file: .env

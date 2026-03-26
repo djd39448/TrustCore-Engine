@@ -620,7 +620,7 @@ export function startApiServer(): void {
     const result = await query<{ id: string }>(
       `INSERT INTO chat_sessions DEFAULT VALUES RETURNING id`
     );
-    res.status(201).json({ id: result.rows[0]!.id });
+    res.status(201).json({ id: result.rows[0].id });
   });
 
   // --- Chat sessions: list ---
