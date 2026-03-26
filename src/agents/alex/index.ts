@@ -1082,9 +1082,10 @@ export async function respondToChat(
          WHERE agent_id = $1
            AND archived = false
            AND embedding IS NOT NULL
-         ORDER BY embedding <=> $2::vector
+           AND session_id != $3
+         ORDER BY (embedding <=> $2::vector) * (1 + EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400)
          LIMIT 5`,
-        [agentId, `[${chunkEmbedding.join(',')}]`]
+        [agentId, `[${chunkEmbedding.join(',')}]`, sessionId]
       );
       if (result.rows.length === 0) return null;
       return result.rows
