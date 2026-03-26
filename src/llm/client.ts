@@ -65,8 +65,36 @@ function estimateModelSizeGB(modelName: string): number {
 }
 
 export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant';
+  role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
+  tool_calls?: OllamaToolCall[];
+}
+
+export interface OllamaToolParameter {
+  type: string;
+  description?: string;
+  enum?: string[];
+}
+
+export interface OllamaTool {
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    parameters: {
+      type: 'object';
+      properties: Record<string, OllamaToolParameter>;
+      required?: string[];
+    };
+  };
+}
+
+export interface OllamaToolCall {
+  id: string;
+  function: {
+    name: string;
+    arguments: Record<string, unknown>;
+  };
 }
 
 /**
@@ -115,6 +143,71 @@ async function fetchChat(messages: ChatMessage[], model: string): Promise<string
 }
 
 /**
+ * Raw fetch to Ollama with tools — no queue, used internally.
+ */
+async function fetchChatWithTools(
+  messages: ChatMessage[],
+  tools: OllamaTool[],
+  model: string
+): Promise<{ content: string | null; toolCalls: OllamaToolCall[] }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 300_000);
+
+  try {
+    const response = await fetch(`${OLLAMA_HOST}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        messages,
+        tools,
+        stream: false,
+        options: { num_ctx: OLLAMA_NUM_CTX },
+        ...(OLLAMA_KEEP_ALIVE !== undefined
+          ? { keep_alive: OLLAMA_KEEP_ALIVE } : {}),
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      console.warn(`[LLM] chatWithTools error ${response.status}`);
+      return { content: null, toolCalls: [] };
+    }
+
+    const data = await response.json() as {
+      message?: {
+        content?: string;
+        tool_calls?: Array<{
+          id: string;
+          function: { name: string; arguments: Record<string, unknown> }
+        }>
+      }
+    };
+
+    return {
+      content: data.message?.content ?? null,
+      toolCalls: (data.message?.tool_calls ?? []).map(tc => ({
+        id: tc.id,
+        function: {
+          name: tc.function.name,
+          arguments: tc.function.arguments,
+        },
+      })),
+    };
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      console.error(`[LLM] chatWithTools timed out (model=${model})`);
+    } else {
+      console.warn('[LLM] chatWithTools unavailable:',
+        err instanceof Error ? err.message : String(err));
+    }
+    return { content: null, toolCalls: [] };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Send a chat prompt through the priority queue.
  * Returns the assistant reply text, or null on failure.
  *
@@ -135,6 +228,37 @@ export async function chat(
   } catch (err) {
     console.error('[LLM] Queue rejected request:', err instanceof Error ? err.message : String(err));
     return null;
+  }
+}
+
+/**
+ * Send a chat prompt with tool definitions. The model may respond
+ * with plain text OR a tool_calls array. Returns both so the caller
+ * can dispatch tool execution.
+ *
+ * @param messages  Chat messages including system prompt
+ * @param tools     Tool definitions in Ollama function-calling format
+ * @param model     Model name (must support tool calling)
+ * @param priority  Queue priority (default 1 — alex routing)
+ * @param label     Human-readable label for queue logging
+ */
+export async function chatWithTools(
+  messages: ChatMessage[],
+  tools: OllamaTool[],
+  model: string = LLM_MODEL,
+  priority: Priority = 1,
+  label = 'chat-with-tools'
+): Promise<{ content: string | null; toolCalls: OllamaToolCall[] }> {
+  const modelSizeGB = estimateModelSizeGB(model);
+  try {
+    const result = await enqueue(priority, label, model, modelSizeGB,
+      () => fetchChatWithTools(messages, tools, model)
+    );
+    return result;
+  } catch (err) {
+    console.error('[LLM] chatWithTools queue rejected:',
+      err instanceof Error ? err.message : String(err));
+    return { content: null, toolCalls: [] };
   }
 }
 

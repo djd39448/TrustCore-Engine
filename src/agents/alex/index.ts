@@ -27,8 +27,8 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { pool, query } from '../../db/client.js';
-import { writeUnifiedMemory, updateTask, resolveAgentId, searchKnowledgeBase, readUnifiedMemory } from '../../mcp/tools.js';
-import { classifyTaskIntent, prompt, chat, type ChatMessage, LLM_MODEL } from '../../llm/client.js';
+import { writeUnifiedMemory, updateTask, resolveAgentId, searchKnowledgeBase, readUnifiedMemory, createTask } from '../../mcp/tools.js';
+import { classifyTaskIntent, prompt, chatWithTools, type ChatMessage, type OllamaTool, LLM_MODEL } from '../../llm/client.js';
 import { dispatch } from '../registry.js';
 import type { EvalResult } from '../eval/index.js';
 import { store, load, summarize } from '@trustcore/memory-core';
@@ -208,6 +208,56 @@ const memoryDb = { query: (sql: string, params?: unknown[]) => pool.query(sql, p
  * prompt() returns string|null; complete() must return string, so null maps to ''.
  */
 const memoryLlm = { complete: (p: string): Promise<string> => prompt(p).then(r => r ?? '') };
+
+/**
+ * Tool definitions available to Alex in chat context.
+ * These are passed to the LLM so it can decide to call them.
+ */
+const ALEX_CHAT_TOOLS: OllamaTool[] = [
+  {
+    type: 'function',
+    function: {
+      name: 'create_task',
+      description: 'Create a new task in the TrustCore task queue. Use this when Dave asks you to do something, schedule something, or follow up on something.',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: {
+            type: 'string',
+            description: 'Short descriptive title for the task'
+          },
+          description: {
+            type: 'string',
+            description: 'Full details of what needs to be done'
+          },
+          assigned_to: {
+            type: 'string',
+            description: 'Agent slug to assign to: alex, research, email-writer. Omit if unsure.',
+            enum: ['alex', 'research', 'email-writer']
+          },
+        },
+        required: ['title'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'search_memory',
+      description: 'Search Alex\'s long-term memory for relevant past conversations, decisions, or events. Use this when you need to recall something specific that may not be in your current context.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description: 'Natural language description of what you want to remember'
+          },
+        },
+        required: ['query'],
+      },
+    },
+  },
+];
 
 /** Alex's UUID, cached after the first DB lookup. Never re-resolved per-request. */
 let alexUuid: string | null = null;
@@ -1126,12 +1176,113 @@ export async function respondToChat(
     { role: 'user', content: userMessage },
   ];
 
-  // Step 6: Call the LLM. Priority 1 — this is Alex routing/responding.
-  const response = await chat(messages, LLM_MODEL, 1, `chat:${sessionId}`);
+  // Step 6: Call LLM with tool support. Alex may respond with text
+  // or invoke a tool. If a tool is called, execute it and feed the
+  // result back for a final text response.
+  const MAX_TOOL_ROUNDS = 3; // prevent infinite loops
+  let response: string | null = null;
+  const toolMessages = [...messages];
+
+  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    const result = await chatWithTools(
+      toolMessages,
+      ALEX_CHAT_TOOLS,
+      LLM_MODEL,
+      1,
+      `chat:${sessionId}`
+    );
+
+    if (result.toolCalls.length === 0) {
+      // Plain text response — we're done
+      response = result.content;
+      break;
+    }
+
+    // Push the assistant message with all tool calls ONCE before
+    // iterating through results. Ollama needs this to correlate
+    // which result answers which call.
+    toolMessages.push({
+      role: 'assistant' as const,
+      content: '',
+      tool_calls: result.toolCalls,
+    });
+
+    // Now execute each tool call and push one result per call
+    for (const toolCall of result.toolCalls) {
+      let toolResult: string;
+
+      if (toolCall.function.name === 'create_task') {
+        const args = toolCall.function.arguments as {
+          title: string;
+          description?: string;
+          assigned_to?: string;
+        };
+        try {
+          const task = await createTask(
+            'alex',
+            args.title,
+            args.description,
+            args.assigned_to
+          );
+          toolResult = JSON.stringify({
+            success: true,
+            task_id: task.id,
+            message: `Task created: ${args.title}`
+          });
+          void query(
+            `SELECT pg_notify('task_ready', $1)`,
+            [task.id]
+          );
+        } catch (err) {
+          toolResult = JSON.stringify({
+            success: false,
+            error: err instanceof Error ? err.message : String(err)
+          });
+        }
+      } else if (toolCall.function.name === 'search_memory') {
+        const args = toolCall.function.arguments as { query: string };
+        try {
+          const searchEmbedding = await embed(args.query);
+          if (!searchEmbedding) {
+            toolResult = JSON.stringify({ results: [] });
+          } else {
+            const searchResult = await query<{ content_text: string; created_at: Date }>(
+              `SELECT content_text, created_at
+               FROM memory_chunks
+               WHERE agent_id = $1
+                 AND archived = false
+                 AND embedding IS NOT NULL
+                 AND session_id != $3
+               ORDER BY (embedding <=> $2::vector) *
+                 (1 + EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400)
+               LIMIT 5`,
+              [agentId, `[${searchEmbedding.join(',')}]`, sessionId]
+            );
+            toolResult = JSON.stringify({
+              results: searchResult.rows.map(r => ({
+                content: r.content_text.slice(0, 300),
+                when: r.created_at,
+              }))
+            });
+          }
+        } catch (err) {
+          toolResult = JSON.stringify({ results: [], error: String(err) });
+        }
+      } else {
+        toolResult = JSON.stringify({ error: `Unknown tool: ${toolCall.function.name}` });
+      }
+
+      // Push tool result (no assistant message here)
+      toolMessages.push({
+        role: 'tool' as const,
+        content: toolResult,
+      });
+    }
+    // Continue loop — model will now generate text response with tool results
+  }
 
   if (!response) {
-    // LLM unavailable — write a graceful fallback so the conversation
-    // record is complete even when Ollama is down.
+    // LLM unavailable or hit max rounds without text — graceful fallback.
     const fallback = "I'm having trouble connecting to my language model right now. Please try again in a moment.";
     await query(
       `INSERT INTO chat_messages (session_id, role, content)
