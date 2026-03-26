@@ -1061,11 +1061,39 @@ export async function respondToChat(
   // budget. Summaries give Alex structured long-term context without raw
   // turn bloat.
   const agentId = await getAlexUuid();
-  const summaries = await load(agentId, memoryDb, { sessionId, contextBudget: 6000 });
+  const summaries = await load(agentId, memoryDb, { contextBudget: 6000 });
   const historyMessages: ChatMessage[] = summaries.map(s => ({
     role: 'system' as const,
     content: `[Conversation summary: ${s.summaryText}]`,
   }));
+
+  // Step 3b: Semantic search over raw memory chunks using the user's
+  // message as the query. This gives Alex access to actual conversation
+  // content, not just compressed summaries. If the summary chain is thin
+  // or silent on the specific topic asked, these chunks provide the
+  // ground truth to answer from rather than confabulating.
+  const chunkEmbedding = await embed(userMessage);
+  const rawChunkContext: string | null = await (async () => {
+    if (!chunkEmbedding) return null;
+    try {
+      const result = await query<{ content_text: string; created_at: Date }>(
+        `SELECT content_text, created_at
+         FROM memory_chunks
+         WHERE agent_id = $1
+           AND archived = false
+           AND embedding IS NOT NULL
+         ORDER BY embedding <=> $2::vector
+         LIMIT 5`,
+        [agentId, `[${chunkEmbedding.join(',')}]`]
+      );
+      if (result.rows.length === 0) return null;
+      return result.rows
+        .map(r => `- ${r.content_text.slice(0, 200)}`)
+        .join('\n');
+    } catch {
+      return null;
+    }
+  })();
 
   // Step 4: Pull relevant memories from unified_memory using semantic
   // search on the user's message. Limit to 3 — enough for context
@@ -1083,9 +1111,12 @@ export async function respondToChat(
   // Inject it as the system prompt so Alex's identity governs every response.
   const agentContext = AGENT ? `\n\n---\n\n${AGENT}` : '';
   const userContext  = USER  ? `\n\n---\n\n${USER}`  : '';
+  const recallBlock = rawChunkContext
+    ? `\n\nMemory recall (raw conversation chunks most relevant to this question):\n${rawChunkContext}`
+    : '';
   const systemPrompt = SOUL
-    ? `${SOUL}${agentContext}${userContext}\n\n---\n\nYou are Alex. You are having a direct conversation with Dave. Be yourself — thoughtful, precise, honest. This is not a task. This is a conversation.${memoryContext ? `\n\nRelevant context from memory:\n${memoryContext}` : ''}`
-    : `You are Alex, chief of staff for TrustCore Systems. Be direct and thoughtful.${memoryContext ? `\n\nRelevant context from memory:\n${memoryContext}` : ''}`;
+    ? `${SOUL}${agentContext}${userContext}\n\n---\n\nYou are Alex. You are having a direct conversation with Dave. Be yourself — thoughtful, precise, honest. This is not a task. This is a conversation.${memoryContext ? `\n\nRelevant context from memory:\n${memoryContext}` : ''}${recallBlock}`
+    : `You are Alex, chief of staff for TrustCore Systems. Be direct and thoughtful.${memoryContext ? `\n\nRelevant context from memory:\n${memoryContext}` : ''}${recallBlock}`;
 
   // Build conversation history as LLM messages.
   const messages: ChatMessage[] = [
