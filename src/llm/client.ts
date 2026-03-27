@@ -290,9 +290,19 @@ export async function classifyTaskIntent(
       {
         role: 'system',
         content: `You are a task router for an AI agent system. Given a task, reply with ONLY one of these agent slugs:
-- "research" — web research, information lookup, fact-finding, knowledge retrieval
-- "email-writer" — drafting emails, writing messages, composing correspondence
-- "alex" — orchestration, planning, coordination, general tasks
+- "research" — web research, information lookup, fact-finding, knowledge retrieval, summarizing external sources
+- "email-writer" — drafting and sending emails TO a specific named recipient (requires: recipient name, recipient company, clear goal). Do NOT use for writing documents, mission statements, reports, or content without a named recipient.
+- "alex" — orchestration, planning, coordination, general tasks, writing documents, drafting internal content, mission statements, summaries, reports, analysis
+
+Examples of correct routing:
+  "Write an email to John Smith at Acme Corp" → email-writer
+  "Draft a mission statement for TrustCore" → alex
+  "Research family trust structures in Ohio" → research
+  "Write a cold outreach to Sarah at Google" → email-writer
+  "Summarize our Q2 goals" → alex
+  "Look up best practices for asset protection" → research
+  "Draft an email introducing TrustCore to investors" → email-writer
+  "Create a one-page overview of TrustCore" → alex
 
 Reply with just the slug and nothing else. No explanation.`,
       },
