@@ -1,9 +1,9 @@
 # TrustCore Engine — Master Architecture Document
 
-**Version:** 1.0  
-**Status:** Active blueprint — all build phases reference this document  
-**Last updated:** March 2026 (updated with scaling architecture, agent lifecycle, Tim full role, Soul/User identity system)
-**Author:** Dave + Claude
+**Version:** 2.0
+**Status:** Active blueprint — all build phases reference this document
+**Last updated:** March 27, 2026 (v2.0 — MemoryCore integration, Core Five team, Archivist, Tim's Team, Commercial Architecture, character training pipeline)
+**Author:** Dave + Claude + Alex
 
 ---
 
@@ -33,19 +33,23 @@ Everything else in this document is in service of these three properties.
 
 ## System Overview
 
-TrustCore has five major subsystems. Each one is described in detail in its own section below.
+TrustCore has seven major subsystems. Each one is described in detail in its own section below.
 
-**1. The Agent Framework** — Alex (chief of staff) plus a swarm of specialized sub-agents, each running a local LLM via Ollama, each with their own tools and skills.
+**1. The Agent Framework** — The Core Five (Alex, Eve, Sage, Tim, Archie) plus a swarm of specialized sub-agents, each running a local LLM via Ollama, each with their own identity, tools, and skills.
 
-**2. The Memory System** — A two-tier SQL + vector database that gives every agent persistent memory across sessions, with unified shared consciousness and private individual journals.
+**2. The Memory System** — A hierarchical SQL + vector memory architecture powered by the standalone MemoryCore library. Provides every agent with persistent cross-session memory through chunked storage, semantic search with time-decay scoring, automatic summarization, and archival compression.
 
-**3. The Training Factory** — An autonomous pipeline built on autoresearch that trains, evaluates, and deploys specialized small LLMs, then continuously improves them through DPO fine-tuning on their own performance data.
+**3. The Training Factory** — An autonomous pipeline that trains, evaluates, and deploys specialized small LLMs, continuously improves them through DPO fine-tuning on their own performance data, and bakes agent identity into model weights using the Open Character Training pipeline.
 
 **4. The Self-Healing Layer** — A monitoring and diagnosis system that detects failures, applies known fixes automatically, and invokes autonomous repair for novel failures.
 
 **5. The Evolution Sandbox** — A containerized clone environment where architectural experiments run in complete isolation from production. Only validated improvements promote to production.
 
-These five subsystems are not independent — they feed each other. Better architecture means better healing. Better healing means more reliable training data. Better training data means smarter agents. Smarter agents generate better architectural insights. The whole system compounds over time.
+**6. The Archivist (Archie)** — The institutional intelligence layer. Archie watches everything the system does, detects patterns, monitors quality drift, and preserves organizational DNA. He is the reason TrustCore builds a moat that cannot be copied — the operational history of the system becomes a proprietary asset that compounds over time.
+
+**7. The Integration Layer (Tim's Team)** — A full deployment and onboarding department. Not a single agent but a six-member team that installs TrustCore alongside legacy systems, interviews domain experts, wires integrations, and monitors institutional drift after go-live.
+
+These seven subsystems are not independent — they feed each other. Better architecture means better healing. Better healing means more reliable training data. Better training data means smarter agents. Smarter agents generate better architectural insights. Archie watches it all and ensures the organizational knowledge compounds rather than evaporating. The whole system gets harder to replicate over time, not easier.
 
 ---
 
@@ -53,11 +57,13 @@ These five subsystems are not independent — they feed each other. Better archi
 
 ```
 trustcore-engine/           ← This repo — core framework
-trustcore-factory/          ← Training factory and model pipeline  
+trustcore-factory/          ← Training factory and model pipeline
 mission-control/            ← Next.js dashboard UI (separate repo)
+TrustCore-MemoryCore/       ← Hierarchical memory library (chunks, load, store, summarize, archive)
+TrustCore-ASBCP/            ← Agent Schema-Based Communication Protocol — spec and TypeScript SDK
 ```
 
-All three repos work together but are deliberately separated. The engine is the brain. The factory is the improvement mechanism. Mission Control is the window into the system.
+All five repos work together but are deliberately separated. The engine is the brain. The factory is the improvement mechanism. Mission Control is the window into the system. MemoryCore is the memory substrate that all agents share. ASBCP is the message format standard that makes inter-agent communication inspectable and schema-validated.
 
 ---
 
@@ -77,7 +83,20 @@ Alex's responsibilities:
 - Monitor system health and trigger self-healing when needed
 - Monitor training data thresholds and trigger retraining cycles
 
-Alex runs on a capable local LLM via Ollama. Current model: **qwen2.5:14b** (9 GB, fits entirely in GPU 1 VRAM at 4096-token context). The 35b model was the original target but exceeds single-GPU VRAM when combined with KV cache — see Part 6 for the hardware constraint details.
+Alex runs on a capable local LLM via Ollama. Current model: **qwen2.5:14b** (~12 GB, fits entirely in GPU 1 VRAM at 8192-token context). The 35b model was the original target but exceeds single-GPU VRAM when combined with KV cache — see Part 6 for the hardware constraint details.
+
+### Alex's Chat Tools
+
+Alex has native tool calling from the Mission Control chat UI. When Dave sends a message, Alex processes it through a tool-calling loop (maximum 3 rounds) before responding. The four tools available in chat:
+
+- **`create_task`** — creates a real task record from natural language, fires `pg_notify` immediately so the target agent picks it up without waiting for the next polling cycle. Alex uses this when Dave asks him to dispatch work conversationally rather than through the task form.
+- **`search_memory`** — semantic search over `memory_chunks` with session exclusion and time-decay scoring. Alex calls this when he detects uncertainty about past events, decisions, or context before answering. He never confabulates — if memory context is insufficient, he says so.
+- **`get_task_result`** — retrieves status and result for a task by UUID. Alex uses this to answer "what happened with that research task" questions without requiring Dave to navigate to the Tasks tab.
+- **`list_recent_tasks`** — lists Alex's recently created tasks with result previews. Gives Dave a quick status summary conversationally.
+
+**Memory Integrity Protocol:** Alex is explicitly instructed to detect his own uncertainty. When answering questions about past conversations, decisions, or events, he searches memory before responding rather than relying on context window recall. He distinguishes between "I remember" (retrieved from memory) and "I don't have that in memory" (honest gap). This protocol is defined in `src/agents/alex/AGENT.md`.
+
+Tool call persistence: every tool execution writes `[Tool: name] {result}` to `chat_messages` so Alex's tool usage is part of the conversation record across sessions.
 
 **Alex's heartbeat** is the nervous system of TrustCore. Every 60 seconds it:
 1. Writes a pulse to unified_memory
@@ -91,12 +110,17 @@ Alex runs on a capable local LLM via Ollama. Current model: **qwen2.5:14b** (9 G
 
 Sub-agents are small specialized LLMs fine-tuned for a single narrow task. They live in Docker containers. They sit idle until called. They are extraordinary at their specific job and do nothing else.
 
-The current sub-agent roster:
-- **email-writer** — drafts emails given a brief
-- **mailbox-agent** — handles actual email sending via SMTP
-- **research-agent** — web search and summarization (planned)
-- **eval** — multi-dimensional output quality scorer; runs as a standalone HTTP service on port 3005; invoked by Alex after every sub-task completion; scores across 6 weighted dimensions (technical_correctness, completeness, brand_voice, recipient_personalization, clarity, contextual_appropriateness); primary source of DPO training signal; uses qwen2.5:7b on GPU 0
-- **resource-manager** — GPU VRAM monitor and LLM request scheduler; polls nvidia-smi every 5 seconds; manages VRAM-aware dispatch for the GPU 0 shared execution pool; exposes `getAvailableSlots()`, `canDispatchNow()`, `acquireSlot()`, and `recommendHost()` to the LLM priority queue
+**The Core Five:**
+- **Alex** — Chief of Staff. Primary interface, orchestrator, dispatcher. Runs qwen2.5:14b on GPU 1. Always on.
+- **Eve** — Quality Conscience. Runs as a standalone HTTP service on port 3005. Scores every sub-agent output across 6 weighted dimensions (technical_correctness, completeness, brand_voice, recipient_personalization, clarity, contextual_appropriateness). Primary source of DPO training signal. Uses qwen2.5:7b on GPU 0. Eve is the reason the system knows when it's getting better and when it's getting worse — she is the metric layer the entire improvement pipeline depends on.
+- **Sage** — Research Agent. Web search, synthesis, and domain analysis. Produces structured research outputs with citations. MemoryCore-wired: loads cross-session context at task start, stores findings on completion.
+- **Tim** — Infrastructure and Integration. Manages the model registry, agent lifecycle, codebase maintenance, and the full deployment pipeline for new client installations. Tim is the only agent with command line access. Alex does not have shell access — the Chief of Staff does not go to the factory floor.
+- **Archie (The Archivist)** — Institutional Intelligence. Watches the full operational record, detects patterns, monitors quality drift, monitors cost anomalies, and preserves organizational DNA. Archie is what turns operational data into a proprietary moat. See Part 5c (The Archivist) for full specification.
+
+**The Bench:**
+- **email-writer** — drafts emails given a brief. Retired from the Core Five. Still available for specialized email workflows but no longer a primary agent. Core email dispatching now goes through Alex directly.
+- **mailbox-agent** — handles actual email sending via SMTP.
+- **resource-manager** — GPU VRAM monitor and LLM request scheduler. Polls nvidia-smi every 5 seconds. Manages VRAM-aware dispatch for the GPU 0 shared execution pool.
 
 Each sub-agent has:
 - Its own fine-tuned LLM model (trained by the factory)
@@ -128,6 +152,20 @@ Alex dispatches tasks to sub-agents by:
 5. Alex's heartbeat detects the completion and processes the result
 
 This is database-mediated communication. Agents never call each other directly. This means any agent can fail and restart without losing the task — it just picks up from the database state.
+
+**ASBCP — Agent Schema-Based Communication Protocol**
+
+All task payloads conform to the ASBCP schema standard, defined in the `TrustCore-ASBCP` repository and consumed via the `@asbcp/core` TypeScript SDK. ASBCP enforces that every message passing between agents is schema-validated at the boundary — malformed task payloads are rejected before they reach the executing agent. This makes inter-agent communication inspectable (every message has a known shape), debuggable (validation errors identify the exact field that failed), and trainable (schema-conformant messages are valid DPO training inputs). The database-mediated communication pattern and the ASBCP schema standard are complementary — the database ensures durability, ASBCP ensures structure.
+
+### Pending Architecture Decisions
+
+These are known architectural gaps that have been identified but not yet designed:
+
+**Multi-step task orchestration** — Alex currently delegates single atomic tasks to sub-agents. Complex goals often require a sequence: research → draft → review → send. The current architecture has no native concept of a task chain or workflow with conditional branching. Alex handles this today by creating tasks manually and monitoring results, acting as a human-in-the-loop executor. A proper orchestration layer would let Alex dispatch workflows rather than individual tasks, with branching logic encoded in the workflow schema rather than in Alex's reasoning loop.
+
+**Alex as temporary task executor** — Alex executes some tasks himself that should eventually be delegated: short-form writing, quick research, document drafting. This is intentional for the early phase (fewer moving parts, faster iteration) but creates a ceiling — Alex cannot parallelize tasks he is executing himself, and his context window fills with task content rather than orchestration state. The transition plan is to delegate these to Core Five agents as each agent reaches production quality.
+
+**Pre-approval hash pattern** — Certain high-stakes tasks (financial decisions, external commitments, actions visible to third parties) should require explicit human approval before execution. The current system has no cryptographic commitment mechanism — Alex could in principle execute an action and then claim it was approved. The planned solution is a pre-approval hash: Alex presents the proposed action in a canonical serialized form, the user approves the hash, and the action cannot be executed unless the hash matches. This makes approval tamper-evident and creates an audit trail that is independent of Alex's own memory.
 
 ---
 
@@ -206,6 +244,27 @@ Key design decisions locked in:
 - is_consolidated flag for consolidation pipeline
 - embedding_model column on all vector tables (future model migration support)
 - Deferred FK between unified_memory and memory_consolidations (circular reference resolved across migrations 005-007)
+
+### MemoryCore Library
+
+All memory access goes through `@trustcore/memory-core` — a shared TypeScript library that gives every agent a consistent API regardless of which tables it reads from or writes to.
+
+**Core API:**
+```typescript
+store(agentId, content, options?)  // write to unified_memory with embedding
+load(agentId, sessionId)           // load recent memories for a session
+summarize(agentId, sessionId)      // LLM-compress a session into a summary
+archive(memoryId)                  // soft-archive via is_archived flag
+```
+
+**Semantic chunk recall** — every store() call chunks the content, embeds each chunk via nomic-embed-text, and writes to `memory_chunks`. At load time, the current context is embedded and the top-k most semantically similar chunks are retrieved using cosine similarity, weighted by a time-decay factor. This means the most relevant past context surfaces even when it is not recent.
+
+**Schema mapping:**
+- `memory_chunks` — raw embedded chunks from store() calls
+- `memory_summaries` — compressed session summaries from summarize()
+- `memory_archives` — long-term cold storage from archive()
+
+The library is built as a separate repo (`trustcore-memory-core`) and installed into the Engine container at build time. Agents import it as a first-class dependency — they do not query the database directly for memory operations.
 
 ---
 
@@ -350,6 +409,30 @@ model_versions (
   created_at timestamptz DEFAULT now()
 )
 ```
+
+### Character Training Pipeline
+
+Building task competency is half the factory's job. The other half is building *character* — the persistent personality, values, and voice that make an agent trustworthy and consistent across every interaction.
+
+TrustCore uses a two-stage pipeline based on Open Character Training (arXiv 2511.01689):
+
+**Stage 1 — DPO distillation from a strong teacher**
+The agent's `Soul.md` is sent to a large teacher model (e.g., claude-opus-4-6). The teacher generates thousands of (prompt, chosen, rejected) triplets that demonstrate the target character. These triplets feed a DPO training run on the student model, baking the character into the weights directly.
+
+**Stage 2 — Introspective SFT**
+The student is asked to describe its own values, reasoning style, and relationship to its principals. Answers that match `Soul.md` are kept as SFT examples. A short supervised fine-tuning pass on these examples reinforces self-consistency — the model answers "who are you?" questions coherently because it has practiced them.
+
+**Personality delta library**
+Rather than storing full fine-tuned models, the factory stores *deltas*:
+```
+δ = θ_fine-tuned − θ_pretrained
+```
+Deltas are maintained per model size tier (3b, 9b, 14b, 32b) and merged onto fresh base checkpoints via mergekit. This means:
+- A new base model can receive an existing character without retraining from scratch
+- Multiple character deltas can be tested and compared without full re-runs
+- Storage cost scales with delta size, not full model size (~300 MB for a 9b delta vs 6 GB for the full model)
+
+The factory is responsible for both capability fine-tuning and character fine-tuning. They run as separate jobs and their outputs are merged before deployment.
 
 ---
 
@@ -591,7 +674,7 @@ These settings exist to prevent resource exhaustion that would crash the entire 
 
 `OLLAMA_MAX_LOADED_MODELS` is set differently on each Ollama instance:
 
-- **`ollama-gpu1`: `OLLAMA_MAX_LOADED_MODELS=1`** — only one model may be loaded at a time. Combined with `OLLAMA_KEEP_ALIVE=-1`, this permanently holds `qwen2.5:14b` (10 GB at `OLLAMA_NUM_CTX=4096`) in VRAM and refuses to load anything else. This is intentional: GPU 1 is Alex's exclusive home. Do not raise this value.
+- **`ollama-gpu1`: `OLLAMA_MAX_LOADED_MODELS=1`** — only one model may be loaded at a time. Combined with `OLLAMA_KEEP_ALIVE=-1`, this permanently holds `qwen2.5:14b` (~12 GB at `OLLAMA_NUM_CTX=8192`) in VRAM and refuses to load anything else. This is intentional: GPU 1 is Alex's exclusive home. Do not raise this value.
 
 - **`ollama-gpu0`: `OLLAMA_MAX_LOADED_MODELS=8`** — Ollama's internal concurrency cap is deliberately high because the resource manager enforces the real VRAM budget via `acquireSlot()` and the `GPU0_AVAILABLE_MB=22528` constant. Letting Ollama manage up to 8 runners allows faster context switching between small models (9b, 4b, 2b, nomic-embed-text).
 
@@ -603,13 +686,129 @@ All LLM calls in `src/llm/client.ts` have a 120-second hard timeout enforced via
 
 ---
 
+## Part 5c: The Archivist (Archie)
+
+Archie is the institutional intelligence of TrustCore. Where other agents handle discrete tasks, Archie watches everything. He is the only agent whose primary job is observation rather than execution.
+
+### What Archie Does
+
+**Operational data curation** — Archie reads the full operational record: `tasks`, `agent_tool_calls`, `unified_memory`, `feedback`, `eval_results`, `system_health`. He is not a consumer of these tables — he is their curator. He validates completeness, detects anomalies, and flags records that will decay in usefulness if not enriched now.
+
+**Quality drift monitoring** — Archie tracks eval scores per agent over rolling windows (7-day, 30-day, 90-day). A downward trend triggers a `system_health` warning before it becomes a production incident. Archie's job is to catch decay before Dave notices it.
+
+**Cost anomaly detection** — Archie monitors token consumption, GPU utilization, and task completion rates. A spike in token usage on a sub-agent that should be running a narrow, well-defined task usually means the task is being handled incorrectly. Archie flags it.
+
+**Organizational DNA preservation** — Decisions Dave makes, patterns Alex learns, calibrations the eval agent discovers — these are organizationally valuable but distributed across conversation history, task results, and memory records. Archie surfaces them into structured form in the knowledge base so they are not lost to context window limits or container restarts.
+
+### Demand-Driven Scaling Pattern
+
+Archie runs on a slow heartbeat (every 15 minutes by default). When work is available, he spins up additional worker instances via `SKIP LOCKED` to drain the backlog concurrently. When the queue is empty, all instances exit.
+
+```sql
+-- Archie worker: claim one unprocessed record atomically
+SELECT id FROM archival_queue
+WHERE processed_at IS NULL
+ORDER BY created_at
+FOR UPDATE SKIP LOCKED
+LIMIT 1;
+```
+
+This means Archie uses zero VRAM when idle (no model loaded, no container running inference) and scales to N parallel workers proportionally to queue depth, bounded by the GPU 0 resource manager's `acquireSlot()` budget. The pattern generalizes: any agent that processes a queue rather than responding to real-time requests can use this architecture.
+
+### The Data Flywheel
+
+Archie is how TrustCore's operational data becomes proprietary value. Every task completed, every email evaluated, every user preference recorded is raw material. Left in database tables, it is just logs. Archie's job is to refine it:
+
+- Task patterns → skill schemas (what does TrustCore actually do most often?)
+- Eval failures → DPO training triplets (what does bad output look like for this agent?)
+- User corrections → preference deltas (how does Dave's taste differ from the model's default?)
+- Successful outreach → voice fingerprint (what tone, length, and framing landed?)
+
+Over time this creates a dataset that cannot be replicated by a competitor who spins up the same open-source models. The advantage is not the model — it is the accumulated signal that makes the model behave correctly for this specific organization and principal. Archie is the agent responsible for making sure that signal is captured, structured, and fed back into training.
+
+---
+
+## Part 5d: Tim's Team
+
+Tim is TrustCore's Infrastructure & Integration Foreman. He does not generate content, make routing decisions, or interface with the user. His job is to ensure that TrustCore has reliable, maintained data connections to the systems and sources that make the rest of the team effective.
+
+### Tim's Department
+
+Tim runs a six-member department. Each member is a specialized sub-agent:
+
+| Member | Role |
+|--------|------|
+| **Tim (Foreman)** | Oversight, prioritization, escalation decisions |
+| **Crawler** | Web scraping and monitoring; watches target sites for changes |
+| **Scribe** | Data transformation; converts unstructured sources into clean records |
+| **Wirer** | API and webhook integration; connects TrustCore to external services |
+| **Interviewer** | Structured information gathering; asks targeted questions to fill knowledge gaps |
+| **Validator** | Data quality and integrity; catches stale records, broken links, schema violations |
+
+### The 90-Day Pilot Model
+
+Tim's team operates on a 90-day pilot model. When a new integration is requested — a new data source, a new external system, a new monitoring target — Tim spins up the relevant sub-agents for a fixed 90-day pilot period. At the end of the pilot:
+
+1. Validator reports on data quality over the period
+2. Archie reports on how frequently the data was actually used by the rest of the team
+3. If usage justifies the ongoing VRAM and maintenance cost → integration is promoted to permanent
+4. If usage does not justify cost → integration is retired cleanly, records archived
+
+This prevents integration bloat. Systems that were added speculatively and never actually used do not persist indefinitely.
+
+### Tim's Heartbeat
+
+Tim runs on a slow heartbeat — much slower than the task-execution agents. Most of his work is scheduled maintenance (nightly crawls, weekly validation sweeps, monthly integration health checks) rather than real-time response. Tim does not compete with Alex and the Core Five for GPU resources because his inference needs are small and infrequent.
+
+**Important:** Tim has read access to the host filesystem and can execute shell commands to run integration scripts. This access is scoped to the `~/integrations/` directory and is explicitly approved. He does not have write access to agent source code or database migrations.
+
+---
+
+## Part 5e: The Commercial Architecture
+
+### Four Revenue Layers
+
+TrustCore's commercial model is designed around what it actually is: an operational intelligence system that learns from every task it completes. The revenue layers reflect that:
+
+**Layer 1 — Managed service** (current): TrustCore runs as a managed AI operations layer for high-value individual clients. Pricing is per-seat, per-task, or retainer-based depending on engagement type. This is the early-revenue vehicle while the platform matures.
+
+**Layer 2 — Vertical SaaS** (12–18 months): Domain-specific deployments for professional services firms — estate attorneys, family office advisors, wealth managers. These clients have similar operational needs (client communication, document preparation, research, task tracking) and can run TrustCore against their own data without requiring custom builds.
+
+**Layer 3 — Platform licensing** (18–36 months): License the agent framework, training pipeline, and ASBCP protocol to enterprises that want to build their own agent teams but do not want to start from scratch. The licensing model is per-deployment-tier based on agent count and task volume.
+
+**Layer 4 — Data services** (parallel track): The operational history and training data produced by running TrustCore in production is itself valuable. Anonymized, aggregated datasets of task patterns, eval results, and preference signals can be sold or licensed to model developers who need real-world professional services data for fine-tuning.
+
+### The Moat
+
+The durable competitive advantage in this architecture is not the technology stack — every component is open-source and replicable. The moat is operational history:
+
+- Months of eval results that encode what good output looks like for specific task types
+- A preference database that captures how specific principals actually want work done
+- A skill library shaped by what actually gets requested rather than what seemed likely in advance
+- DPO training data generated from real task outcomes, not synthetic preference rankings
+
+A competitor who licenses the same models and deploys the same architecture starts with zero of this. TrustCore clients who have been running the system for 12 months have an asset that cannot be purchased — only accumulated. This is why Archie's curation work matters commercially: every properly captured data point is a moat contribution.
+
+### Deployment Architecture for Commercial Clients
+
+Commercial clients do not share infrastructure. Each client deployment is isolated:
+
+- Dedicated PostgreSQL instance (separate schema per client, or separate database for higher-tier clients)
+- Client-specific `User.md` and agent `Soul.md` files baked into the deployment
+- Separate Ollama instances or API-routing to hosted models depending on client tier
+- Client data never cross-contaminates the training pipeline unless explicitly opted in
+
+The TrustCore Engine repo is the shared codebase. Client-specific configuration lives outside the repo in per-client deployment manifests.
+
+---
+
 ## Part 6: GPU Resource Manager
 
 ### The Two-GPU Strategy
 
 TrustCore runs on a system with two RTX 3090 GPUs, each served by its own dedicated Ollama instance:
 
-- **GPU 1 — Alex's permanent home** (`trustcore-ollama-gpu1`, port 11434). The `qwen2.5:14b` model is always loaded here with `OLLAMA_KEEP_ALIVE=-1` and `OLLAMA_NUM_CTX=4096` so it fits in 10 GB and is never evicted. `OLLAMA_MAX_LOADED_MODELS=1` enforces that no other model can displace it. Alex, the API server, the MCP server, and the resource manager all route to this instance. Sub-agent work is never sent here.
+- **GPU 1 — Alex's permanent home** (`trustcore-ollama-gpu1`, port 11434). The `qwen2.5:14b` model is always loaded here with `OLLAMA_KEEP_ALIVE=-1` and `OLLAMA_NUM_CTX=8192` so it fits in ~12 GB and is never evicted. `OLLAMA_MAX_LOADED_MODELS=1` enforces that no other model can displace it. Alex, the API server, the MCP server, and the resource manager all route to this instance. Sub-agent work is never sent here.
 
 - **GPU 0 — Shared execution pool** (`trustcore-ollama-gpu0`, port 11435). Used by email-writer, research, and the training factory. `OLLAMA_KEEP_ALIVE=0` means models are evicted immediately after each request, keeping VRAM free for the next job. `OLLAMA_MAX_LOADED_MODELS=8` allows Ollama's internal scheduler to handle concurrency while the resource manager enforces the real VRAM budget.
 
@@ -1091,7 +1290,9 @@ The solution is a three-tier memory model:
 
 **Individual memory** — namespaced by task, case, or customer, and time-limited. An email thread with a specific client gets its own memory context that lives as long as the engagement and expires when it closes. This prevents memory from accumulating indefinitely while preserving the context that matters for active work.
 
-### Tim the Toolman Taylor — Full Role Definition
+### Tim — Infrastructure & Integration (Full Role)
+
+*See Part 5d for Tim's full department structure, the 90-day pilot model, and his team's individual roles.*
 
 Tim is not a codebase maintenance utility. He is the infrastructure lifecycle manager for the entire TrustCore swarm. He is to the agent infrastructure what a lead platform engineer is to a software organization — the person responsible for making sure the tools work, the pipelines are healthy, and the system can grow without collapsing under its own weight.
 
@@ -1257,6 +1458,18 @@ Source code changes are the one category where a mistake can propagate in ways t
 
 **Why GPU 0 for training and GPU 1 for inference?**
 GPU 1 is connected to the display (Disp.A shows On in nvidia-smi output). Using it for heavy training while it's also rendering the desktop causes display stuttering and thermal issues. GPU 0 has no display connection and can run at full power for training without affecting system usability. This is a hardware constraint, not an arbitrary choice.
+
+**Why exactly five core agents (the Core Five) rather than more specialists?**
+Five was chosen because it matches the span of control Dave can actually supervise at the current stage of development. Each core agent has a distinct, non-overlapping domain. Adding a sixth specialist before the first five are operating reliably would spread attention and testing coverage too thin. The Bench agents (email-writer, mailbox-agent, resource-manager) remain available but are not primary — they solve narrower problems and operate under Alex's direction rather than as autonomous principals.
+
+**Why does Tim have host shell access?**
+Tim's integration and monitoring work requires running scripts that interact with the host filesystem, external APIs, and network services. These are not things that can be done through SQL or Ollama alone. Shell access is scoped to `~/integrations/` and explicitly approved. Every shell command Tim executes is logged to `agent_tool_calls`. This is the minimum necessary access for Tim to do his job — he does not have write access to agent source code, migrations, or system configuration.
+
+**Why is character training a factory responsibility rather than a deployment concern?**
+Character (Soul.md → weights) is baked into the model before deployment, not injected at runtime via system prompt. This is a deliberate design choice. Runtime prompting of character produces inconsistency — the model's default behavior leaks through under adversarial prompting or unusual task types. Baking character into weights via DPO is more robust and does not consume context window tokens on every call. The factory is responsible for producing agents that already have their character, not for supplying it call-by-call.
+
+**Why is Archie a named agent rather than a background service?**
+Archie has agency — he makes prioritization decisions, notices patterns, and determines what gets promoted to the knowledge base versus what gets discarded. A background service that runs on a fixed schedule without judgment would miss the most valuable signals (which are often irregular) and accumulate noise. Naming Archie as an agent with a specific role and Soul.md ensures his curation decisions are consistent, logged, and improvable through the same DPO pipeline as every other agent. He is a curator, not a cron job.
 
 ---
 
