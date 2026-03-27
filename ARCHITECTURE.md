@@ -98,6 +98,23 @@ Alex has native tool calling from the Mission Control chat UI. When Dave sends a
 
 Tool call persistence: every tool execution writes `[Tool: name] {result}` to `chat_messages` so Alex's tool usage is part of the conversation record across sessions.
 
+### Alex Is Subject to Eval
+
+No agent is above the law at TrustCore. Alex's decisions — routing, decomposition, task enrichment, novel task classification, escalation calibration — are all scored by Eve on the same DPO pipeline that governs every other agent. The Chief of Staff answers to the same Quality Conscience as everyone else.
+
+Eve's eval dimensions for Alex are different from the standard six used for task output. Alex is scored on:
+
+- **Routing accuracy** — did the task go to the right agent or combination?
+- **Novel task classification** — was the "new specialist needed" call correct, or was this a repackaging problem?
+- **Enrichment quality** — did Alex's enrichment block actually help the sub-agent produce a better output?
+- **Decomposition accuracy** — for multi-step tasks, did Alex break it down correctly?
+- **Escalation calibration** — did Alex escalate to Dave at the right threshold? Too often is noise. Too rarely is missed oversight.
+- **Memory integrity** — did Alex correctly distinguish between confirmed memory and uncertainty without confabulating?
+
+Alex's training cadence is slower than sub-agents — monthly rather than threshold-triggered, because his model is the most resource-intensive in the swarm and he cannot go offline during active hours. But the pipeline is identical. Alex gets better at orchestration the same way every agent gets better at its job: Eve scores him, the factory trains him, he wakes up measurably improved.
+
+### Alex's Heartbeat
+
 **Alex's heartbeat** is the nervous system of TrustCore. Every 60 seconds it:
 1. Writes a pulse to unified_memory
 2. Checks system health tables for any degraded or dead services
@@ -105,6 +122,12 @@ Tool call persistence: every tool execution writes `[Tool: name] {result}` to `c
 4. Checks if any evolution sandbox experiments are complete and ready for evaluation
 5. Runs memory consolidation if the unified_memory table exceeds the consolidation threshold
 6. Logs a summary of what it found and what actions it took
+
+### The Governing Document
+
+All agents in TrustCore — every member of the Core Five, every specialist on the bench, every agent yet to be built — operate under **Foundation.md** as the highest governing document in the system. Foundation.md sits above ARCHITECTURE.md, above every Soul.md, above every rule. When any part of the system conflicts with Foundation.md, Foundation.md wins.
+
+ARCHITECTURE.md does not reproduce Foundation.md's contents. Foundation.md is for the principals this system serves, not for the technical blueprint. What every agent and every contributor needs to know is this: it exists, it governs, and it answers the question the architecture cannot — *why* this system was built.
 
 ### Sub-Agents
 
@@ -157,15 +180,39 @@ This is database-mediated communication. Agents never call each other directly. 
 
 All task payloads conform to the ASBCP schema standard, defined in the `TrustCore-ASBCP` repository and consumed via the `@asbcp/core` TypeScript SDK. ASBCP enforces that every message passing between agents is schema-validated at the boundary — malformed task payloads are rejected before they reach the executing agent. This makes inter-agent communication inspectable (every message has a known shape), debuggable (validation errors identify the exact field that failed), and trainable (schema-conformant messages are valid DPO training inputs). The database-mediated communication pattern and the ASBCP schema standard are complementary — the database ensures durability, ASBCP ensures structure.
 
-### Pending Architecture Decisions
+### Pending Architecture — Decided, Not Yet Built
 
-These are known architectural gaps that have been identified but not yet designed:
+The following design decisions are made and recorded here so future build sessions do not re-derive them from scratch. These are not open questions — they are decided architecture waiting for implementation.
 
-**Multi-step task orchestration** — Alex currently delegates single atomic tasks to sub-agents. Complex goals often require a sequence: research → draft → review → send. The current architecture has no native concept of a task chain or workflow with conditional branching. Alex handles this today by creating tasks manually and monitoring results, acting as a human-in-the-loop executor. A proper orchestration layer would let Alex dispatch workflows rather than individual tasks, with branching logic encoded in the workflow schema rather than in Alex's reasoning loop.
+**Multi-step task orchestration.** When Alex detects that a user request requires sequential execution across multiple agents — "research X, write a report on it, email it to Y" — he builds an explicit execution plan: an ordered list of sub-tasks where each step's output is the next step's input. The staging folder (`/trustcore-data/staging/`) is the inter-stage handoff mechanism. Alex passes the staging file path between steps, not the file content. This keeps task records clean and avoids bloating the database with large intermediate outputs.
 
-**Alex as temporary task executor** — Alex executes some tasks himself that should eventually be delegated: short-form writing, quick research, document drafting. This is intentional for the early phase (fewer moving parts, faster iteration) but creates a ceiling — Alex cannot parallelize tasks he is executing himself, and his context window fills with task content rather than orchestration state. The transition plan is to delegate these to Core Five agents as each agent reaches production quality.
+**The novel task discovery workflow.** When Alex receives a task with no existing specialist or established workflow, a structured discovery process activates. This is distinct from normal orchestration — Alex enters a different mode with different responsibilities.
 
-**Pre-approval hash pattern** — Certain high-stakes tasks (financial decisions, external commitments, actions visible to third parties) should require explicit human approval before execution. The current system has no cryptographic commitment mechanism — Alex could in principle execute an action and then claim it was approved. The planned solution is a pre-approval hash: Alex presents the proposed action in a canonical serialized form, the user approves the hash, and the action cannot be executed unless the hash matches. This makes approval tamper-evident and creates an audit trail that is independent of Alex's own memory.
+Step 1 — Alex notifies the user immediately: "I don't have a workflow for this task type yet. I'm building one. This will take longer than a standard request."
+
+Step 2 — Alex determines whether this is truly novel or a novel combination of existing agents. He asks: can I get this done by repackaging current agents with new MD files, new KB entries, or a different execution order? If yes, he does that — no Jenny, no specialist pipeline. This decision is logged to unified_memory with Alex's full reasoning so Dave, Tim, and Archie can review it. Alex is eval'd on this decision by Eve (see below).
+
+Step 3 — If genuinely novel, Alex builds an eval spec for Eve. He decomposes the task, identifies what good output looks like, and writes a structured evaluation specification in ASBCP format that includes: the task definition, the quality dimensions specific to this task type, the decision logic behind each dimension, and any known standards that apply. He sends this to Eve.
+
+Step 4 — Eve receives the eval spec. She checks her knowledge base for any applicable standards, runs autoresearch where standards don't exist, calibrates the spec, and activates new task mode with this spec as her rubric.
+
+Step 5 — Alex routes to Jenny (the Generalist — see below). Jenny runs the task 4 times serially. Eve scores all 4 outputs against the calibrated spec.
+
+Step 6 — Runs 1 through 3: Alex presents all 4 outputs to the user. The user picks the winner, ranks the others, and explains what's wrong with the losers. Alex also surfaces any ambiguities or missing information at this point and collects answers. These 3 runs produce human-graded labeled pairs — the highest-signal training data in the system. They are stored in a temp reference folder Eve can access during subsequent scoring.
+
+Step 7 — Run 4 onward: Eve scores autonomously, using the human-graded pairs as her reference set. The flywheel is now running on calibrated signal.
+
+Step 8 — After 10 interactions of this task type, the first specialist training run is triggered automatically. Training data: 3 human-graded × 4 outputs = 12 gold pairs. 7 Eve-graded × 4 outputs = 28 pairs calibrated against gold. 40 total pairs, sufficient to train a specialist that beats Jenny's baseline. Tim receives the work order.
+
+Step 9 — Specialist deployed. Retraining is frequent early (every 10 new interactions), tapering as quality stabilizes. The new agent improves the same way every agent does — same flywheel, same DPO pipeline.
+
+**Jenny — The Generalist.** Jenny is a specialist-on-demand tool Alex calls when no specialist exists. She is not a Core Five member and is not always loaded. Tim spins her up when Alex needs her and shuts her down when the discovery phase ends. Jenny can handle any task type at a generalist quality level. Her purpose is not to produce great outputs — it is to produce scoreable outputs that seed the training pipeline and hold the line while a specialist is being trained. She runs on a 7b model on GPU 0. She earns her name when the team decides she has.
+
+**Pre-approval hash pattern.** Alex can act autonomously on certain classes of decisions — agent creation, scaling requests, schema promotion — because Dave pre-approved these action classes in verifiable past conversations stored in MemoryCore. The hash of the approval conversation is stored in unified_memory. Tim verifies the hash before executing any action that invokes this authority. This pattern allows autonomous operation within defined policy without requiring Dave to be consulted on every instance of a pre-approved decision class.
+
+**Identity retrofits pending.** Sage, Eve, and Archie do not yet have Soul.md, Agent.md, or User.md files. These must be authored before the character training pipeline can run for these agents. Authoring is scheduled before the next factory run. Each identity document must reference Foundation.md as its highest governing principle.
+
+**Eve caller vs executor failure detection pending.** When email-writer returns `validation_error` with `missing_fields`, the failure belongs to Alex (the dispatcher) not email-writer (the executor). Eve currently scores the executor. Needed: `failure_reason` classification (`executor_failure` vs `caller_failure`) and Alex fallback behavior when `validation_error` is returned.
 
 ---
 
@@ -245,26 +292,23 @@ Key design decisions locked in:
 - embedding_model column on all vector tables (future model migration support)
 - Deferred FK between unified_memory and memory_consolidations (circular reference resolved across migrations 005-007)
 
-### MemoryCore Library
+### The MemoryCore Library
 
-All memory access goes through `@trustcore/memory-core` — a shared TypeScript library that gives every agent a consistent API regardless of which tables it reads from or writes to.
+MemoryCore is a standalone TypeScript library (`TrustCore-MemoryCore` repo, consumed as `@trustcore/memory-core`) that implements the full hierarchical memory pipeline. It replaces direct SQL queries to `unified_memory` and `agent_memory` for all agent conversation memory operations.
 
-**Core API:**
-```typescript
-store(agentId, content, options?)  // write to unified_memory with embedding
-load(agentId, sessionId)           // load recent memories for a session
-summarize(agentId, sessionId)      // LLM-compress a session into a summary
-archive(memoryId)                  // soft-archive via is_archived flag
-```
+MemoryCore's four core operations:
 
-**Semantic chunk recall** — every store() call chunks the content, embeds each chunk via nomic-embed-text, and writes to `memory_chunks`. At load time, the current context is embedded and the top-k most semantically similar chunks are retrieved using cosine similarity, weighted by a time-decay factor. This means the most relevant past context surfaces even when it is not recent.
+**`store()`** — writes a new memory chunk for a given agent and session. Every user message and every agent response is stored as a chunk after the conversation turn completes. Chunks are embedded immediately using `nomic-embed-text` and stored in `memory_chunks` with the embedding vector, session ID, agent ID, and timestamp.
 
-**Schema mapping:**
-- `memory_chunks` — raw embedded chunks from store() calls
-- `memory_summaries` — compressed session summaries from summarize()
-- `memory_archives` — long-term cold storage from archive()
+**`load()`** — retrieves the most relevant memory context for the current conversation. Cross-session by design — `sessionId` is excluded from the load query so Alex always has access to memories from all past conversations, not just the current one. Accepts a `contextBudget` parameter (default: 6000 tokens) that controls how much memory context is injected. Prioritizes summaries over raw chunks when both are available, and prioritizes recent chunks over old ones within the budget.
 
-The library is built as a separate repo (`trustcore-memory-core`) and installed into the Engine container at build time. Agents import it as a first-class dependency — they do not query the database directly for memory operations.
+**`summarize()`** — compresses a set of raw chunks into a single summary record in `memory_summaries`. Triggered automatically when a session accumulates 10 or more chunks since the last summary. The summarization prompt instructs the model to produce 4–8 sentences minimum, capturing: topics covered, decisions made, artifacts produced, named entities, emotional tone, and open questions. This is not lossy compression — it is structured distillation.
+
+**`archive()`** — final-stage compression for memory that has already been summarized. Archives old summaries into high-level period summaries, keeping the memory store navigable as it grows over months and years.
+
+**Semantic chunk recall** — separate from `load()`, Alex performs a direct semantic search over `memory_chunks` using the current user message as the query vector. This search excludes the current session (to prevent current-session poisoning of recall) and applies time-decay scoring: `(embedding <=> query_vector) * (1 + seconds_since_creation / 86400)`. This surfaces chunks that are both semantically relevant and temporally appropriate, with recent relevant chunks ranked higher than old ones even at similar semantic distance.
+
+**Schema note:** MemoryCore adds `memory_chunks`, `memory_summaries`, and `memory_archives` tables to the TrustCore schema. These are managed by MemoryCore's own migration system. The 8-table schema described earlier in Part 2 reflects the original architecture — the live schema includes these three additional MemoryCore tables.
 
 ---
 
@@ -433,6 +477,42 @@ Deltas are maintained per model size tier (3b, 9b, 14b, 32b) and merged onto fre
 - Storage cost scales with delta size, not full model size (~300 MB for a 9b delta vs 6 GB for the full model)
 
 The factory is responsible for both capability fine-tuning and character fine-tuning. They run as separate jobs and their outputs are merged before deployment.
+
+### The Three-Tier Identity Architecture
+
+The character training pipeline enables a three-tier approach to agent identity that reduces context window consumption while maintaining character consistency across the swarm.
+
+**Tier 1 — Baked into weights (stable identity, ~80% of character)**
+
+The stable, slow-changing content from Soul.md — core values, reasoning style, relationship to TrustCore's mission, the ethical orientation that flows from Foundation.md's principles — is baked into model weights via the DPO distillation + introspective SFT pipeline. Once baked, this layer costs zero context window tokens at inference time. The agent's character is present without being loaded. This content genuinely never changes: who the agent is at the deepest level.
+
+**Tier 2 — Runtime loaded but small (evolving identity)**
+
+After stable content moves to weights, Soul.md, Agent.md, and User.md become much thinner documents. What remains is only genuinely dynamic material: current preferences, relationship calibrations, recent decisions, things that evolve over weeks and months. These load cheaply at startup. When they update — when Alex learns something new about Dave, when a preference shifts — the runtime document updates without triggering a retraining cycle. The baked layer holds. The runtime layer evolves.
+
+**Tier 3 — Session context**
+
+Current conversation, active task, memory recall via MemoryCore. Unchanged from standard operation.
+
+**Why this matters for context window budget:**
+
+The original all-runtime approach loaded the full identity document stack on every inference. At scale — multiple agents, long documents, complex tasks — this consumes significant context budget before the task begins. The three-tier approach inverts this: the deepest and most stable identity content is free (it is in the weights), and only the thin evolving layer consumes context. A 500-token runtime supplement replaces what previously required 2,000+ tokens.
+
+**The α dial:**
+
+The scaling coefficient α controls how strongly the baked character expresses. A neutral specialist (data validation, classification) gets α=0.3 — character present but quiet. Alex gets α=1.0 — full expression. The same delta, different intensities. No retraining required to adjust.
+
+**Tim's responsibility:**
+
+When Foundation.md or Soul.md updates significantly enough to warrant a new bake, Tim:
+1. Identifies which content is newly stable enough for Tier 1
+2. Trims that content from the runtime Tier 2 documents
+3. Runs one DPO distillation + introspective SFT pass per active model size tier
+4. Extracts the personality delta: `δ = θ_fine-tuned − θ_pretrained`
+5. Merges into all specialists of that size via mergekit at the appropriate α
+6. Updates the delta library
+
+The entire swarm updates from one training run per size tier. No specialist is retrained individually.
 
 ---
 
@@ -982,6 +1062,9 @@ Build in this order. Each phase depends on the previous ones being solid.
 - Estimated: 1 week
 
 ### Phase 9 — Skill Library & Schema Protocol 🔄 IN PROGRESS
+
+*Note: email-writer is now on The Bench (see Part 1). Phase 9 schema protocol work still applies — schema execution is the standard for all specialist agents going forward, including any future email specialist Tim builds.*
+
 - ✅ 9a: JSON schema format standard defined (src/skill-library/schema.ts + cold-outreach.schema.json)
 - ⏳ 9b: Convert email-writer to schema-based execution
 - ⏳ 9c: Build classify-email-type workflow (known vs novel detection)
@@ -990,12 +1073,12 @@ Build in this order. Each phase depends on the previous ones being solid.
 - ⏳ 9f: Human review queue in Mission Control with Approve/Revise/Reject actions
 - ⏳ 9g: SMTP delivery tool for actual email sending
 - ⏳ Train specialist models on schema execution DPO pairs
-- ⏳ Roll out schema protocol to research agent and all subsequent agents
+- ⏳ Roll out schema protocol to Sage and all subsequent agents
 - Estimated: 3-4 weeks remaining
 
 ### Phase 10 — Scaling Architecture & Agent Lifecycle
 - Model registry with version tracking, benchmark scores, and retirement logic
-- Tim the Toolman Taylor agent — infrastructure lifecycle manager
+- Tim's Team — full integration and infrastructure department (see Part 5d)
 - Agent spawning protocol with resource manager gating
 - Role-type memory partitioning (shared role memory vs individual task memory)
 - Container lifecycle management (create, deploy, health-check, deprecate)
@@ -1236,15 +1319,49 @@ The skill library rolls out in seven sub-phases within Phase 9:
 
 **Phase 9f — Specialist model training.** Once the schema execution database is large enough to produce quality DPO pairs, train the first specialist model on email schema execution via the existing factory pipeline. Evaluate against the current general-purpose model. Promote if it outperforms.
 
-**Phase 9g — Protocol rollout.** Extend the schema protocol to the research agent and all subsequent specialist agents. Every new agent that joins the swarm is schema-driven from day one.
+**Phase 9g — Protocol rollout.** Extend the schema protocol to the Sage and all subsequent specialist agents. Every new agent that joins the swarm is schema-driven from day one.
 
 ### The Broader Vision
 
-The skill library and schema protocol are the architectural foundation for everything TrustCore becomes after the initial build. Every specialist agent that follows the email-writer — Tim the Toolman Taylor managing codebase maintenance schemas, the Eval Agent running structured evaluation schemas, future agents for calendar management, supplier communications, financial reporting — follows the same pattern. One protocol, one skill library structure, one training pipeline, one review workflow.
+The skill library and schema protocol are the architectural foundation for everything TrustCore becomes after the initial build. Every specialist agent that follows the email-writer — Tim managing codebase maintenance schemas, Eve running structured evaluation schemas, future agents for calendar management, supplier communications, financial reporting — follows the same pattern. One protocol, one skill library structure, one training pipeline, one review workflow.
 
 This transforms TrustCore from a collection of general-purpose LLM agents into a structured business process automation platform. The distinction is fundamental. General-purpose LLM agents are powerful but unpredictable, expensive to run at scale, and difficult to improve systematically. Schema-driven agents are predictable by design, cheap to run on specialist hardware, and improve continuously through the DPO pipeline without human intervention.
 
 The LLMs do not go away — they remain the intelligence within the workflows. But they are no longer asked to define the workflows themselves. The workflows are defined by humans, refined by experience, and encoded in schemas that make the agent's behavior inspectable, reproducible, and improvable. This is the architectural foundation that makes long-term autonomous operation possible — not just months from now, but years from now, when the system has accumulated enough schema execution history to train models that are genuinely world-class at the specific tasks TrustCore actually does.
+
+---
+
+## Part 10: How to Use This Document
+
+### For Claude Code sessions
+
+Every Claude Code session that works on this codebase should start with:
+
+```
+Read ARCHITECTURE.md completely before doing anything.
+Then read the relevant section for what we're building today.
+Then proceed.
+```
+
+This document is the memory that persists across sessions. You should never have to re-explain the two-tier memory system, the DPO pipeline, or the sandbox evolution concept to a new Claude Code session. It reads this document and it knows.
+
+### For new contributors
+
+Read this entire document before touching any code. The architecture is intentional. If something seems wrong or over-engineered, read the relevant section again — there is almost certainly a reason for it that is explained here. If you still disagree, open a discussion rather than changing it unilaterally.
+
+### For agents working on the codebase
+
+Yes, this means you. If you are an AI agent that has been given access to this codebase, read this document first. Understand the vision. Do not optimize locally at the expense of global coherence. Do not remove the comment explaining why unified_memory and agent_memory are separate tables just because the code would be simpler with one table. The architecture is the product.
+
+### Updating this document
+
+This document should be updated whenever:
+- A major architectural decision is made or changed
+- A new phase is completed
+- A design decision turns out to be wrong and needs to be corrected
+- A new subsystem is added
+
+Keep the build sequence table current. Future contributors and future AI sessions use it to understand where the project is and what comes next.
 
 ---
 
@@ -1276,7 +1393,7 @@ Four to six base models cover approximately 90% of all tasks across the agent sw
 
 Fine-tuned models are created only for three scenarios: tasks where a base model genuinely fails to meet quality threshold even with a well-designed schema; high-volume tasks where even a small quality improvement compounds across thousands of executions; and domain-specific knowledge that cannot be practically encoded in a schema or knowledge base entry.
 
-Tim the Toolman Taylor manages the model registry. When Tim creates or registers a fine-tuned model, he records: the model version, the base model it was fine-tuned from, the training job ID, benchmark scores across all relevant eval dimensions, the task types it covers, current usage metrics, and a retirement threshold. Models that are unused for 90 days and whose covered task types are adequately served by a schema-driven base model are flagged for retirement review. Tim proposes the retirement; a human approves or defers.
+Tim manages the model registry. When Tim creates or registers a fine-tuned model, he records: the model version, the base model it was fine-tuned from, the training job ID, benchmark scores across all relevant eval dimensions, the task types it covers, current usage metrics, and a retirement threshold. Models that are unused for 90 days and whose covered task types are adequately served by a schema-driven base model are flagged for retirement review. Tim proposes the retirement; a human approves or defers.
 
 ### Memory Architecture at Scale
 
@@ -1367,6 +1484,20 @@ This produces three problems that cannot be fixed by better prompting at the cal
 
 The Soul/User Identity System solves all three by giving every agent two persistent identity documents that are loaded in full at startup, before any task is processed.
 
+### The Document Hierarchy
+
+Identity in TrustCore operates across four levels, each governing the one below it:
+
+**Foundation.md** — the highest document. Defines why TrustCore exists and who it serves. All agents operate under it. Its contents are for the principals, not the technical architecture — but every Soul.md and User.md must reference it as their north star.
+
+**Shared Soul.md** — TrustCore's collective identity and mission statement. Every agent reads it. No individual agent's Soul.md can override it.
+
+**Individual Soul.md** — each agent's unique character within the shared framework.
+
+**User.md** — who each agent directly serves, maintained and updated by Alex as understanding deepens.
+
+Foundation.md is the ceiling and the floor for all of it.
+
 ### Two Identity Documents Per Agent
 
 **Soul.md** is the agent's character definition. It describes who the agent is, what it is for, how it communicates, what it will and will not do, and how it relates to other agents in the hierarchy. Soul.md is the agent's professional identity — stable, consistent, and distinctive. It is not a prompt template. It is not a list of instructions. It is a character, written the way a character is written: with voice, with values, with a clear sense of self.
@@ -1396,40 +1527,6 @@ Identity documents are versioned. The `knowledge_base` table records a version n
 The Shared Soul.md and individual Soul.md documents are authored collaboratively between Dave and Claude in a dedicated conversation — not generated by Claude Code during a build session. This is intentional. Character requires thought. It requires the author to ask: what does this agent actually stand for? What would it refuse? What makes its voice distinctive rather than generic? How does it think about the people it serves? These questions cannot be answered well in a late-night build session when the goal is shipping features. They require a different kind of attention.
 
 Dave's Shared User.md begins as a document Dave writes himself — a statement of how he works, what he values, and what he expects. It is seeded into the system on Day 1. From that point forward, Alex maintains it. As Alex learns more about how Dave works — through task feedback, through observed patterns, through explicit corrections — Alex proposes additions and updates. Dave reviews and approves. The document grows richer over time without requiring Dave to actively maintain it. The system does the work of remembering.
-
----
-
-## Part 10: How to Use This Document
-
-### For Claude Code sessions
-
-Every Claude Code session that works on this codebase should start with:
-
-```
-Read ARCHITECTURE.md completely before doing anything. 
-Then read the relevant section for what we're building today.
-Then proceed.
-```
-
-This document is the memory that persists across sessions. You should never have to re-explain the two-tier memory system, the DPO pipeline, or the sandbox evolution concept to a new Claude Code session. It reads this document and it knows.
-
-### For new contributors
-
-Read this entire document before touching any code. The architecture is intentional. If something seems wrong or over-engineered, read the relevant section again — there is almost certainly a reason for it that is explained here. If you still disagree, open a discussion rather than changing it unilaterally.
-
-### For agents working on the codebase
-
-Yes, this means you. If you are an AI agent that has been given access to this codebase, read this document first. Understand the vision. Do not optimize locally at the expense of global coherence. Do not remove the comment explaining why unified_memory and agent_memory are separate tables just because the code would be simpler with one table. The architecture is the product.
-
-### Updating this document
-
-This document should be updated whenever:
-- A major architectural decision is made or changed
-- A new phase is completed
-- A design decision turns out to be wrong and needs to be corrected
-- A new subsystem is added
-
-Keep the build sequence table current. Future contributors and future AI sessions use it to understand where the project is and what comes next.
 
 ---
 
@@ -1471,9 +1568,32 @@ Character (Soul.md → weights) is baked into the model before deployment, not i
 **Why is Archie a named agent rather than a background service?**
 Archie has agency — he makes prioritization decisions, notices patterns, and determines what gets promoted to the knowledge base versus what gets discarded. A background service that runs on a fixed schedule without judgment would miss the most valuable signals (which are often irregular) and accumulate noise. Naming Archie as an agent with a specific role and Soul.md ensures his curation decisions are consistent, logged, and improvable through the same DPO pipeline as every other agent. He is a curator, not a cron job.
 
+**Why is identity split across baked weights and runtime documents rather than all-runtime?**
+All-runtime identity is simple but expensive. Loading 2,000+ tokens of identity documents before every task consumes context budget that should go to the task itself. The three-tier split recognizes that not all identity content changes at the same rate. Values and character are stable — they belong in weights where they cost nothing at inference time. Preferences and calibrations evolve — they belong in thin runtime documents. Session context is ephemeral — it belongs in memory recall. Each tier holds what it is best suited for. The result is an agent that is fully itself without paying the context cost to prove it on every call. This decision was made March 27, 2026.
+
+**Why does Foundation.md govern everything but appear in no agent's system prompt?**
+Foundation.md answers why TrustCore exists. That answer belongs in the principals' hands, not in the technical machinery. Agents operate in service of Foundation.md's purpose without loading its contents — just as an employee serves a company's mission without reciting the founding charter before every meeting. Foundation.md's influence travels through Soul.md (which references it as north star) and through the baked identity layer (which carries its ethical orientation in weights). This decision was made March 27, 2026.
+
+**Why does Alex make the novel-combination-vs-new-specialist decision without a predefined workflow?**
+A predefined workflow for this decision would freeze today's logic permanently. The "is this truly novel or a repackaging problem" judgment is exactly the kind of decision that improves through training — Alex gets better at it as Eve scores his calls and the DPO pipeline runs. A hardcoded ruleset cannot improve. A trained judgment can. The logging requirement (every novel task classification decision written to unified_memory with full reasoning) provides the oversight that a predefined workflow would otherwise supply. This decision was made March 27, 2026.
+
+**Why is Alex subject to the same eval pipeline as every other agent?**
+Because the orchestration layer is where the most consequential decisions in TrustCore get made. If routing logic, task decomposition, and novel task classification are not scored and improved over time, every specialist in the swarm is only as good as the instructions it receives — and those instructions stay static while the specialists themselves compound. Eval on Alex closes this gap. No agent is above the law. This decision was made March 27, 2026.
+
+**Why does Jenny run tasks serially rather than in parallel?**
+Parallel inference on a 7b model running 4 instances simultaneously would consume VRAM needed by the rest of the swarm. Jenny is a discovery tool, not a production workhorse — her latency is acceptable because the user is explicitly told this task type is in discovery mode. Serial execution costs time, not quality. The 4x output breadth is preserved; only the wall clock time changes. This decision was made March 27, 2026.
+
 ---
 
 *This document was written in March 2026 at the beginning of the TrustCore project. If you are reading this from a future version of TrustCore that has implemented all eight phases, congratulations — you built something genuinely remarkable.*
+
+---
+
+## Adjacent Systems
+
+### Astra
+
+Astra is a separate AI system that operates independently of TrustCore. She is documented in `ASTRA.md` in a separate repository. TrustCore does not need to know the details of Astra's architecture. The only thing TrustCore needs to know: Alex and Astra can communicate via a WireGuard/ZeroMQ bridge when explicitly configured. All cross-system communication goes through Alex. No other TrustCore agent has visibility into or contact with Astra.
 
 ---
 
