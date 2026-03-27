@@ -257,6 +257,40 @@ const ALEX_CHAT_TOOLS: OllamaTool[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'get_task_result',
+      description: 'Get the status and result of a specific task by its ID. Use this to check what an agent returned after completing a task.',
+      parameters: {
+        type: 'object',
+        properties: {
+          task_id: {
+            type: 'string',
+            description: 'The UUID of the task to retrieve'
+          },
+        },
+        required: ['task_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_recent_tasks',
+      description: 'List the most recent tasks created by Alex, with their status and a preview of results. Use this to find task IDs or check what work has been done recently.',
+      parameters: {
+        type: 'object',
+        properties: {
+          limit: {
+            type: 'string',
+            description: 'How many tasks to return. Default 5, max 10.',
+          },
+        },
+        required: [],
+      },
+    },
+  },
 ];
 
 /** Alex's UUID, cached after the first DB lookup. Never re-resolved per-request. */
@@ -1268,6 +1302,81 @@ export async function respondToChat(
         } catch (err) {
           toolResult = JSON.stringify({ results: [], error: String(err) });
         }
+      } else if (toolCall.function.name === 'get_task_result') {
+        const args = toolCall.function.arguments as { task_id: string };
+        try {
+          const taskResult = await query<{
+            id: string;
+            title: string;
+            status: string;
+            result: unknown;
+            assigned_to: string | null;
+            completed_at: Date | null;
+          }>(
+            `SELECT t.id, t.title, t.status, t.result,
+                    a.slug as assigned_to, t.completed_at
+             FROM tasks t
+             LEFT JOIN agents a ON a.id = t.assigned_to_agent_id
+             WHERE t.id = $1`,
+            [args.task_id]
+          );
+          if (taskResult.rows.length === 0) {
+            toolResult = JSON.stringify({ error: 'Task not found' });
+          } else {
+            const row = taskResult.rows[0];
+            if (!row) {
+              toolResult = JSON.stringify({ error: 'Task not found' });
+            } else {
+              toolResult = JSON.stringify({
+                id: row.id,
+                title: row.title,
+                status: row.status,
+                assigned_to: row.assigned_to,
+                completed_at: row.completed_at,
+                result: row.result,
+              });
+            }
+          }
+        } catch (err) {
+          toolResult = JSON.stringify({
+            error: err instanceof Error ? err.message : String(err)
+          });
+        }
+
+      } else if (toolCall.function.name === 'list_recent_tasks') {
+        const args = toolCall.function.arguments as { limit?: string };
+        const limitN = Math.min(parseInt(args.limit ?? '5', 10), 10);
+        try {
+          const tasksResult = await query<{
+            id: string;
+            title: string;
+            status: string;
+            assigned_to: string | null;
+            completed_at: Date | null;
+            result_preview: string | null;
+          }>(
+            `SELECT t.id, t.title, t.status,
+                    a.slug as assigned_to,
+                    t.completed_at,
+                    LEFT(t.result::text, 200) as result_preview
+             FROM tasks t
+             LEFT JOIN agents a ON a.id = t.assigned_to_agent_id
+             WHERE t.created_by_agent_id = (
+               SELECT id FROM agents WHERE slug = 'alex'
+             )
+             ORDER BY t.created_at DESC
+             LIMIT $1`,
+            [limitN]
+          );
+          toolResult = JSON.stringify({
+            tasks: tasksResult.rows
+          });
+        } catch (err) {
+          toolResult = JSON.stringify({
+            error: err instanceof Error ? err.message : String(err)
+          });
+        }
+
       } else {
         toolResult = JSON.stringify({ error: `Unknown tool: ${toolCall.function.name}` });
       }
@@ -1277,6 +1386,15 @@ export async function respondToChat(
         role: 'tool' as const,
         content: toolResult,
       });
+
+      // Persist tool call and result into chat_messages so
+      // subsequent turns can load them as conversation history.
+      // Without this, Alex loses memory of tool calls between messages.
+      await query(
+        `INSERT INTO chat_messages (session_id, role, content)
+         VALUES ($1, 'alex', $2)`,
+        [sessionId, `[Tool: ${toolCall.function.name}] ${toolResult}`]
+      );
     }
     // Continue loop — model will now generate text response with tool results
   }
