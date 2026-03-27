@@ -1119,6 +1119,41 @@ Spawned instances are ephemeral. They receive a specific sub-task, execute it, r
 
 This enables parallel execution of workload spikes without permanent resource commitment. When Tim has twenty files to refactor, he spawns twenty instances that each refactor one file in parallel. When they finish, VRAM is released and the next job can proceed. The system does not need to pre-provision resources for worst-case concurrency — it scales dynamically within the physical VRAM envelope.
 
+### Demand-Driven Instance Scaling — The Archivist Pattern
+
+The Archivist (and any agent with parallelizable workload) supports horizontal scaling on demand. When backlog exceeds a manageable threshold, the agent requests additional capacity from Tim rather than processing sequentially and falling behind.
+
+**The request pattern:**
+The Archivist monitors its own queue depth. When unprocessed chunks exceed a configured threshold (default: 200 chunks), it files a work order to Tim via the task queue:
+
+  "I have {N} chunks to process at a current rate of {R} per hour. Estimated clearance time: {T} hours. Requesting {X} additional instances for {Y} hours. VRAM estimate: {Z} GB per instance."
+
+Tim evaluates available VRAM via the resource manager, approves or modifies the request within Dave's pre-approved scaling policy, and spins up the requested instances.
+
+**How parallel instances share work without coordination:**
+The work queue is the database. Memory chunks awaiting processing are rows in memory_chunks. Multiple Archivist instances claim work using PostgreSQL's SKIP LOCKED pattern:
+
+  SELECT id, content_text FROM memory_chunks
+  WHERE archived = false AND processed = false
+  ORDER BY created_at ASC
+  FOR UPDATE SKIP LOCKED
+  LIMIT 10;
+
+This prevents two instances from processing the same chunk without requiring any inter-process coordination. Each instance claims its batch, processes it, marks it complete, and claims the next batch. No message broker, no distributed lock manager — the database handles it.
+
+**Identity and memory are not duplicated:**
+Ephemeral instances inherit the Archivist's Soul.md and Agent.md but do not accumulate individual memory or identity. They are the Archivist's hands, not additional Archivists. When the backlog clears, Tim shuts them down and the resources are released. Only the permanent Archivist instance maintains ongoing memory and heartbeat.
+
+**Pre-approval policy:**
+Tim does not ask Dave for permission on every scaling event. Dave pre-approves a scaling policy stored in unified_memory:
+
+  "Archivist may request up to 4 instances when backlog exceeds 200 chunks. Maximum concurrent VRAM allocation: 8GB. Maximum instance lifetime: 8 hours."
+
+Tim executes within this policy autonomously. Requests that exceed policy limits escalate to Dave for approval before execution. The pre-approval hash is stored in unified_memory so Tim can verify Dave authorized this class of action in a past conversation.
+
+**Why this matters:**
+This is the first concrete implementation of the agent spawning protocol described earlier in Part 11. The Archivist pattern is clean because the work is perfectly parallelizable — chunks are independent, the queue is self-coordinating, and instances are truly stateless. Future agents with similar workload profiles (batch evaluation runs, bulk knowledge base ingestion, parallel web research) should follow the same pattern.
+
 ---
 
 ## Part 12: Soul/User Identity System
