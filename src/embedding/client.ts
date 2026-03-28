@@ -25,16 +25,23 @@ interface OllamaEmbedResponse {
   embedding: number[];
 }
 
+// nomic-embed-text supports up to 8192 tokens (~32 768 chars).
+// Truncate to 8 000 chars to stay safely under the limit and avoid
+// timeouts on very large inputs (e.g. pasted documents).
+const MAX_EMBED_CHARS = 8_000;
+
 /**
  * Generate a 768-dimensional embedding for the given text.
  * Returns null if Ollama is unavailable or the model isn't loaded yet.
+ * Long inputs are truncated to MAX_EMBED_CHARS before embedding.
  */
 export async function embed(text: string): Promise<number[] | null> {
+  const truncated = text.length > MAX_EMBED_CHARS ? text.slice(0, MAX_EMBED_CHARS) : text;
   try {
     const res = await fetch(`${OLLAMA_HOST}/api/embeddings`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: EMBEDDING_MODEL, prompt: text }),
+      body: JSON.stringify({ model: EMBEDDING_MODEL, prompt: truncated }),
       signal: AbortSignal.timeout(30_000),
     });
 

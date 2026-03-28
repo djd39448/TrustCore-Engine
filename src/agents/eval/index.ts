@@ -219,6 +219,7 @@ export async function evaluate(input: EvalInput): Promise<EvalResult> {
     revisionNumber,
     previousEvalId,
     eval_model: EVAL_MODEL,
+    result,
   });
 
   console.log(`[Eval] Task ${taskId} → composite ${composite.toFixed(2)} → ${outcome} (eval ${evalId})`);
@@ -507,6 +508,37 @@ function determineOutcome(composite: number): 'approved' | 'needs_review' | 'nee
 }
 
 /**
+ * Classify the failure reason for a task result.
+ *
+ * 'caller_failure'   — Alex dispatched incorrectly; the result contains a
+ *                       validation_error or missing_fields indicator.
+ * 'executor_failure' — the sub-agent that did the work failed.
+ * null               — not a failure (outcome is approved or needs_review).
+ */
+function classifyFailureReason(
+  outcome: 'approved' | 'needs_review' | 'needs_revision',
+  result: unknown,
+): 'caller_failure' | 'executor_failure' | null {
+  if (outcome === 'approved' || outcome === 'needs_review') return null;
+
+  // Check if the result text indicates a validation / dispatch error
+  const resultText = typeof result === 'string'
+    ? result.toLowerCase()
+    : JSON.stringify(result).toLowerCase();
+
+  if (
+    resultText.includes('validation_error') ||
+    resultText.includes('missing_fields') ||
+    resultText.includes('missing fields') ||
+    resultText.includes('invalid schema')
+  ) {
+    return 'caller_failure';
+  }
+
+  return 'executor_failure';
+}
+
+/**
  * Write the completed eval result to eval_scores in the DB.
  * Records all 6 dimension scores, the composite, outcome, dimension notes,
  * improvement suggestions, the model used, and the revision chain.
@@ -528,11 +560,14 @@ async function persistEval(params: {
   revisionNumber: number;
   previousEvalId?: string;
   eval_model: string;
+  result?: unknown;
 }): Promise<string> {
   const [agentId, evalAgentId] = await Promise.all([
     resolveAgentId(params.producerAgentSlug),
     resolveAgentId('eval'),
   ]);
+
+  const failureReason = classifyFailureReason(params.outcome, params.result);
 
   const result = await query<{ id: string }>(
     `INSERT INTO eval_scores (
@@ -541,14 +576,14 @@ async function persistEval(params: {
        recipient_personalization, clarity, contextual_appropriateness,
        composite_score, outcome,
        dimension_notes, improvement_suggestions,
-       revision_number, previous_eval_id, eval_model
+       revision_number, previous_eval_id, eval_model, failure_reason
      ) VALUES (
        $1, $2, $3,
        $4, $5, $6,
        $7, $8, $9,
        $10, $11,
        $12, $13,
-       $14, $15, $16
+       $14, $15, $16, $17
      ) RETURNING id`,
     [
       params.taskId,
@@ -567,6 +602,7 @@ async function persistEval(params: {
       params.revisionNumber,
       params.previousEvalId ?? null,
       params.eval_model,
+      failureReason,
     ]
   );
 

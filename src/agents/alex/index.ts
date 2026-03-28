@@ -33,6 +33,7 @@ import { dispatch } from '../registry.js';
 import type { EvalResult } from '../eval/index.js';
 import { store, load, summarize } from '@trustcore/memory-core';
 import { embed } from '../../embedding/client.js';
+import { harvestFeedback } from '../eval/harvester.js';
 
 /**
  * ASBCP (Agent Schema Based Communication Protocol) — @asbcp/core
@@ -556,6 +557,7 @@ async function heartbeat(): Promise<void> {
   await pollPendingTasks();
   await checkCompletedDelegations();
   await consolidateOldMemories();
+  await checkRetrainingThresholds();
 }
 
 // ---------------------------------------------------------------------------
@@ -1568,6 +1570,14 @@ async function checkCompletedDelegations(): Promise<void> {
               4
             );
           }
+
+          // Harvest feedback for DPO training pipeline — non-fatal.
+          await harvestFeedback(
+            row.child_id,
+            row.parent_title,
+            row.parent_description ?? null,
+            evalResult,
+          );
         }
       } catch (err) {
         console.error(`[Alex] Eval failed (non-fatal):`, err instanceof Error ? err.message : String(err));
@@ -1761,4 +1771,149 @@ async function consolidateOldMemories(): Promise<void> {
   );
 
   console.error(`[Alex] Consolidated ${ids.length} memories → ${consolidationId}`);
+}
+
+// ---------------------------------------------------------------------------
+// Check retraining thresholds — called every heartbeat.
+// For each active agent, counts unused feedback rows and queues a training
+// job when a threshold is hit. Also triggers emergency retraining when an
+// agent's approval rate drops below 80% over the last 30 days.
+// ---------------------------------------------------------------------------
+
+/**
+ * Retraining trigger rules (cumulative unused feedback counts):
+ *   >= 100  (no active job) → Round 1
+ *   >= 300                  → Round 2
+ *   >= 750                  → Round 3
+ *   >= 2000                 → Round 4
+ *   approval rate < 80% (last 30 days) → emergency (regardless of count)
+ *
+ * Does NOT run training — only queues a training_jobs row.
+ * The factory watches the queue and runs jobs independently.
+ */
+async function checkRetrainingThresholds(): Promise<void> {
+  // Get all active agents (exclude system placeholder)
+  const agentsResult = await query<{ id: string; slug: string }>(
+    `SELECT id, slug FROM agents WHERE slug != 'system' ORDER BY slug`
+  );
+
+  for (const agent of agentsResult.rows) {
+    try {
+      // Count unused feedback for this agent
+      const feedbackResult = await query<{ cnt: string }>(
+        `SELECT COUNT(*) AS cnt FROM feedback
+         WHERE agent_id = $1 AND used_in_training = false`,
+        [agent.id]
+      );
+      const unusedCount = parseInt(feedbackResult.rows[0]?.cnt ?? '0', 10);
+
+      // Check if there is already an active training job for this agent
+      const activeJobResult = await query<{ cnt: string }>(
+        `SELECT COUNT(*) AS cnt FROM training_jobs
+         WHERE agent_id = $1 AND status IN ('queued', 'running', 'evaluating')`,
+        [agent.id]
+      );
+      const hasActiveJob = parseInt(activeJobResult.rows[0]?.cnt ?? '0', 10) > 0;
+
+      // Determine the appropriate threshold round
+      let triggerRound: number | null = null;
+      let triggerValue: number | null = null;
+
+      if (unusedCount >= 2000) {
+        triggerRound = 4;
+        triggerValue = 2000;
+      } else if (unusedCount >= 750) {
+        triggerRound = 3;
+        triggerValue = 750;
+      } else if (unusedCount >= 300) {
+        triggerRound = 2;
+        triggerValue = 300;
+      } else if (unusedCount >= 100 && !hasActiveJob) {
+        // Round 1 only triggers if no active job exists (prevents duplicate queuing)
+        triggerRound = 1;
+        triggerValue = 100;
+      }
+
+      // Round 1 already guards against active jobs above.
+      // For rounds 2-4, allow re-triggering if count crossed a higher threshold
+      // even if a job is already queued — the factory deduplicates by status.
+      if (triggerRound !== null && triggerValue !== null) {
+        // Check if a job at this exact trigger_value is already queued
+        const dupeCheck = await query<{ cnt: string }>(
+          `SELECT COUNT(*) AS cnt FROM training_jobs
+           WHERE agent_id = $1 AND trigger_value = $2 AND status = 'queued'`,
+          [agent.id, triggerValue]
+        );
+        const alreadyQueued = parseInt(dupeCheck.rows[0]?.cnt ?? '0', 10) > 0;
+
+        if (!alreadyQueued) {
+          await query(
+            `INSERT INTO training_jobs (agent_id, trigger_type, trigger_value, status)
+             VALUES ($1, 'threshold', $2, 'queued')`,
+            [agent.id, triggerValue]
+          );
+          await writeUnifiedMemory(
+            'alex',
+            'observation',
+            `Training job queued for agent ${agent.slug} — Round ${triggerRound} threshold hit (${unusedCount} unused feedback rows)`,
+            { agent_id: agent.id, agent_slug: agent.slug, trigger_round: triggerRound, trigger_value: triggerValue, unused_feedback: unusedCount },
+            4
+          );
+          console.error(`[Alex] Training job queued for ${agent.slug} — Round ${triggerRound} (${unusedCount} unused feedback rows)`);
+        }
+      }
+
+      // Emergency check: approval rate < 80% in last 30 days
+      const approvalResult = await query<{ total: string; approved: string }>(
+        `SELECT
+           COUNT(*) AS total,
+           COUNT(*) FILTER (WHERE es.outcome = 'approved') AS approved
+         FROM eval_scores es
+         JOIN tasks t ON t.id = es.task_id
+         WHERE es.agent_id = $1
+           AND es.created_at >= NOW() - INTERVAL '30 days'
+           AND es.calibration_void = false`,
+        [agent.id]
+      );
+
+      const total = parseInt(approvalResult.rows[0]?.total ?? '0', 10);
+      const approved = parseInt(approvalResult.rows[0]?.approved ?? '0', 10);
+
+      if (total >= 10) {
+        // Only check if there is a statistically meaningful sample
+        const approvalRate = approved / total;
+        if (approvalRate < 0.80) {
+          // Check if emergency job already queued recently (last 7 days)
+          const emergencyDupe = await query<{ cnt: string }>(
+            `SELECT COUNT(*) AS cnt FROM training_jobs
+             WHERE agent_id = $1
+               AND trigger_type = 'emergency'
+               AND status = 'queued'
+               AND created_at >= NOW() - INTERVAL '7 days'`,
+            [agent.id]
+          );
+          const emergencyAlreadyQueued = parseInt(emergencyDupe.rows[0]?.cnt ?? '0', 10) > 0;
+
+          if (!emergencyAlreadyQueued) {
+            await query(
+              `INSERT INTO training_jobs (agent_id, trigger_type, trigger_value, status)
+               VALUES ($1, 'emergency', $2, 'queued')`,
+              [agent.id, total]
+            );
+            await writeUnifiedMemory(
+              'alex',
+              'observation',
+              `EMERGENCY training queued for agent ${agent.slug} — approval rate ${(approvalRate * 100).toFixed(1)}% (${approved}/${total} last 30d)`,
+              { agent_id: agent.id, agent_slug: agent.slug, approval_rate: approvalRate, approved, total },
+              5
+            );
+            console.error(`[Alex] EMERGENCY training queued for ${agent.slug} — approval rate ${(approvalRate * 100).toFixed(1)}% (${approved}/${total})`);
+          }
+        }
+      }
+    } catch (err) {
+      // Non-fatal — a bad row for one agent should not block others
+      console.error(`[Alex] checkRetrainingThresholds failed for agent ${agent.slug}:`, err instanceof Error ? err.message : String(err));
+    }
+  }
 }
